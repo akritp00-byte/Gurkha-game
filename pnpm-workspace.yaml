@@ -1,0 +1,15 @@
+packages:
+  - client
+  - server
+  - shared
+
+# Versions shared by several packages ("catalog:" in package.json) are pinned once here.
+catalog:
+  '@types/node': ^22.20.5
+  typescript: ~6.0.3
+
+# pnpm blocks dependency install scripts unless they are listed here.
+# msgpackr-extract's script only rebuilds a native speed-up when no prebuilt binary
+# matches the platform; msgpackr works without it, so we never run it.
+ignoredBuiltDependencies:
+  - msgpackr-extract

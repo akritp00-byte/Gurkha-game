@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#1f3a2a" />
+    <meta
+      name="description"
+      content="Eat smaller dinosaurs, evolve, and survive until the meteor hits."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>EXTINCT.io</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game" aria-label="Game view"></canvas>
+      <header class="title">
+        <h1 class="logo">EXTINCT<span>.io</span></h1>
+        <p class="tagline">Eat smaller. Avoid bigger. Survive the meteor.</p>
+      </header>
+      <p
+        id="server-status"
+        class="server-status"
+        data-testid="server-status"
+        data-status="checking"
+      >
+        Connecting to server…
+      </p>
+    </div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

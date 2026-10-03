@@ -1,0 +1,16 @@
+{
+  "name": "@extinct/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Game constants and rules shared by client and server.",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
+  }
+}

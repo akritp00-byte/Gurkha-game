@@ -1,0 +1,22 @@
+{
+  "name": "@extinct/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Authoritative Colyseus game server.",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch index.ts",
+    "start": "node index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@colyseus/core": "^0.18.18",
+    "@colyseus/schema": "^5.0.35",
+    "@colyseus/ws-transport": "^0.18.4",
+    "@extinct/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

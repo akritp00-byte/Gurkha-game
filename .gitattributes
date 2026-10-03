@@ -1,0 +1,12 @@
+# Normalise line endings so Prettier and CI behave the same on every OS.
+* text=auto eol=lf
+
+# Binary game assets
+*.png binary
+*.jpg binary
+*.webp binary
+*.ktx2 binary
+*.glb binary
+*.mp3 binary
+*.ogg binary
+*.wav binary

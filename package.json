@@ -1,0 +1,34 @@
+{
+  "name": "extinct-io",
+  "version": "0.0.0",
+  "private": true,
+  "description": "EXTINCT.io: a multiplayer third-person 3D browser .io game. Eat smaller dinosaurs, evolve, survive the meteor.",
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "pnpm --recursive --parallel run dev",
+    "build": "pnpm --recursive run build",
+    "start": "pnpm --filter @extinct/server start",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm --recursive run typecheck && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.56.1",
+    "@types/node": "catalog:",
+    "eslint": "^10.12.0",
+    "prettier": "3.9.9",
+    "typescript": "catalog:",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
+  }
+}
