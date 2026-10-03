@@ -2,6 +2,12 @@
 
 One entry per milestone (BUILD_PROMPT.md §9), newest first.
 
+## Unreleased
+
+### Fixed
+
+- A production build with no game server configured (no `VITE_SERVER_URL`) no longer checks for one every 5 seconds. The debug overlay shows "Server: none (offline build)" instead, so static previews of the single-player game run without network errors.
+
 ## M1: Single-player sandbox (2026-10-03)
 
 ### Added

@@ -33,7 +33,7 @@ import { createAmbientLight, createFog, createSky, Sun } from '../render/environ
 import type { QualitySettings } from '../render/quality.ts';
 import { animateLava, createPools, createTerrain, createWater } from '../render/terrain.ts';
 import { createVegetation } from '../render/vegetation.ts';
-import { DebugOverlay } from '../ui/debugOverlay.ts';
+import { DebugOverlay, type ServerStatus } from '../ui/debugOverlay.ts';
 import { ControlsHint } from '../ui/hint.ts';
 import { Hud } from '../ui/hud.ts';
 
@@ -157,9 +157,9 @@ export class Game {
     this.debugApi = this.createDebugApi();
   }
 
-  /** Mark the game server reachable or not in the debug overlay. */
-  setServerOnline(online: boolean): void {
-    this.overlay.setServerOnline(online);
+  /** Show whether the game server is reachable in the debug overlay. */
+  setServerStatus(status: ServerStatus): void {
+    this.overlay.setServerStatus(status);
   }
 
   start(): void {

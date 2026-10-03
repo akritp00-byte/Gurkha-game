@@ -21,6 +21,15 @@ export interface DebugStats {
 
 const REFRESH_MS = 250;
 
+/** `none`: a static build with no game server configured (fine until multiplayer). */
+export type ServerStatus = 'online' | 'offline' | 'none';
+
+const SERVER_STATUS_TEXT: Record<ServerStatus, string> = {
+  online: 'Server: online',
+  offline: 'Server: offline',
+  none: 'Server: none (offline build)',
+};
+
 /** F3 overlay with frame rate, draw calls, ping and entity counts (BUILD_PROMPT.md §6). */
 export class DebugOverlay {
   private readonly root: HTMLElement;
@@ -51,9 +60,9 @@ export class DebugOverlay {
     this.lastRefresh = Number.NEGATIVE_INFINITY;
   }
 
-  setServerOnline(online: boolean): void {
-    this.server.dataset.status = online ? 'online' : 'offline';
-    this.server.textContent = online ? 'Server: online' : 'Server: offline';
+  setServerStatus(status: ServerStatus): void {
+    this.server.dataset.status = status;
+    this.server.textContent = SERVER_STATUS_TEXT[status];
   }
 
   update(now: number, stats: DebugStats): void {

@@ -43,6 +43,15 @@ try {
 window.__extinct = game.debugApi;
 game.start();
 
-watchServerHealth(resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location), (online) => {
-  game.setServerOnline(online);
-});
+// Single-player doesn't need the game server yet. A production build without VITE_SERVER_URL
+// (for example a static preview) has none, so it doesn't poll for one.
+if (import.meta.env.DEV || import.meta.env.VITE_SERVER_URL) {
+  watchServerHealth(
+    resolveServerUrl(import.meta.env.VITE_SERVER_URL, window.location),
+    (online) => {
+      game.setServerStatus(online ? 'online' : 'offline');
+    },
+  );
+} else {
+  game.setServerStatus('none');
+}
