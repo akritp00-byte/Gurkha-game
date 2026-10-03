@@ -52,15 +52,41 @@ export const FOOD_MASS = {
   critter: 4,
 } as const;
 
+/** Food on the island. */
+export const FOOD = {
+  /** Eggs on the island at any time. An eaten egg reappears somewhere else. */
+  eggCount: 260,
+  eggRespawnSeconds: 3,
+  eggRadius: 0.25,
+} as const;
+
+/**
+ * The bite zone: a circle in front of the dinosaur that eats whatever it touches.
+ * Measured in body scales (scale 1 is a newly spawned dinosaur), so it grows with the dino.
+ */
+export const BITE = {
+  /** Distance from the body's centre to the centre of the bite zone, near the snout. */
+  reach: 0.55,
+  radius: 0.45,
+} as const;
+
 /**
  * Movement (BUILD_PROMPT.md §3, "Movement"):
  * speed = baseSpeed × (referenceMass / mass) ^ speedExponent, never below minSpeed.
+ * Turning follows a similar curve: baseTurnRate × (referenceMass / mass) ^ turnExponent
+ * radians per second, never below minTurnRate.
  */
 export const MOVEMENT = {
   baseSpeed: 9,
   referenceMass: 10,
   speedExponent: 0.18,
   minSpeed: 4.5,
+  baseTurnRate: 3.5,
+  turnExponent: 0.22,
+  minTurnRate: 1.2,
+  /** Seconds to reach full speed from standing still, and to stop from full speed. */
+  accelerationSeconds: 0.3,
+  decelerationSeconds: 0.2,
 } as const;
 
 /** Sprinting trades mass for speed and drops meat chunks that anyone can eat. */
@@ -73,12 +99,16 @@ export const SPRINT = {
 /** Body scale grows with mass ^ scaleExponent within a tier, with a visible jump on each evolution. */
 export const GROWTH = {
   scaleExponent: 1 / 3,
+  /** Extra size multiplier gained at each evolution, so every new tier is a visible jump. */
+  evolutionScaleJump: 1.2,
 } as const;
 
-/** Island layout and terrain effects (BUILD_PROMPT.md §3, "World"). */
+/** Island size and terrain effects (BUILD_PROMPT.md §3, "World"). Landmarks are in world/layout.ts. */
 export const WORLD = {
   /** The island is a circle about 300 units across. */
   islandRadius: 150,
+  /** Dinosaurs can't go further from the centre than this, which keeps them on the beach. */
+  walkableRadius: 144,
   riverSpeedMultiplier: 0.7,
   tarPitSpeedMultiplier: 0.5,
 } as const;
@@ -150,4 +180,45 @@ export const PERFORMANCE_BUDGET = {
   maxDrawCalls: 150,
   maxTriangles: 500_000,
   maxInitialDownloadMB: 15,
+} as const;
+
+/**
+ * Third-person camera on a spring arm (BUILD_PROMPT.md §6). Lengths are in body scales, so the
+ * camera pulls back as the dinosaur grows.
+ */
+export const CAMERA = {
+  /** Vertical field of view in degrees, plus a boost at full speed. */
+  fov: 55,
+  speedFovBoost: 4,
+  /** Portrait screens widen the view so it never gets narrower than this horizontally. */
+  minHorizontalFov: 45,
+  /** Arm length and height behind the dinosaur: base + perScale × body scale. */
+  baseDistance: 2.4,
+  distancePerScale: 2.6,
+  baseHeight: 1.4,
+  heightPerScale: 1.25,
+  /** Over-the-shoulder: the camera sits this far to the dinosaur's right. */
+  shoulderOffset: 0.35,
+  /** The camera aims this far ahead of the dinosaur and this high above its feet. */
+  lookAhead: 1.6,
+  lookHeight: 0.5,
+  /** How quickly the camera swings behind a turning dinosaur and zooms out after growth. */
+  followSharpness: 5,
+  zoomSharpness: 2.5,
+  /** Minimum gap between the camera and the ground, in world units. */
+  groundClearance: 0.5,
+  /** Camera punch strength for a bite and for an evolution. */
+  bitePunch: 0.35,
+  evolvePunch: 2.5,
+} as const;
+
+/** Steering feel for mouse and touch controls. */
+export const CONTROLS = {
+  /** Steering this far from straight ahead (radians) turns at the full turn rate. */
+  fullLockAngle: Math.PI / 3,
+  /** Touch joystick radius in CSS pixels; pushing it to the edge is full speed. */
+  joystickRadius: 56,
+  /** Mouse steering: cursor distance from the dinosaur (CSS pixels) for full speed, and the dead zone. */
+  mouseFullSpeedDistance: 140,
+  mouseDeadZone: 18,
 } as const;

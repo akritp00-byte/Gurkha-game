@@ -18,18 +18,42 @@ pnpm format                  # fix formatting
 ## Architecture
 
 - **pnpm monorepo** with `client/`, `server/` and `shared/`. Source sits directly in each package folder (no `src/`), so paths match the brief: `shared/config.ts`, `client/render/`, `server/systems/`.
-- **`shared/`** is pure TypeScript game logic and constants used by both sides: tier logic, the eat rule, the movement step function. No DOM, Node, Three.js or Colyseus imports (ESLint enforces this). Keep it deterministic, because the same step function runs on the server and in client-side prediction.
+- **`shared/`** is pure TypeScript game logic and constants used by both sides. No DOM, Node, Three.js or Colyseus imports (ESLint enforces this). Keep it deterministic, because the same code runs on the server and in client-side prediction. Import it as `@extinct/shared`; `shared/index.ts` re-exports everything.
+  - `config.ts`: gameplay and network tuning.
+  - `movement.ts`: `stepMotion`, the movement step function, plus the speed and turn-rate curves.
+  - `tiers.ts`: tier lookup and body scale.
+  - `sim/world.ts`: `GameWorld`, the simulation of dinosaurs, eggs and eating. It returns events (`eggEaten`, `evolved`, ...) for effects and, later, network messages. Seeded, so tests are repeatable.
+  - `world/layout.ts`: level design, meaning where the volcano, river, tar pits and fern patches are.
+  - `world/terrain.ts`: island heights and zones. `islandHeightfield()` is built once; `heightAt()` matches the rendered triangles exactly.
 - **`server/`** is the authoritative Colyseus 0.18 server. `index.ts` is the entry point. `app.ts` builds the server without binding a port, so tests can start it on port 0. `env.ts` loads the repo-root `.env`. Clients only ever send inputs. Never trust a position sent by a client.
-- **`client/`** is Three.js + Vite, with no game engine. Use `render/` for the scene, camera and effects, `net/` for server communication and `ui/` for the HUD and menus. `assets/` and `audio/` come later.
+- **`client/`** is Three.js + Vite, with no game engine. `assets/` and `audio/` come later.
+  - `game/Game.ts`: the offline sandbox. It samples input, steps `GameWorld` at a fixed `NETWORK.tickRate` (the same rate as the server) and renders interpolated between ticks.
+  - `input/`: keyboard, held-mouse and touch-joystick steering. The pure mappings live in `steering.ts`, so they can be unit tested.
+  - `render/`: `terrain.ts`, `vegetation.ts` and `eggs.ts` (instanced), `environment.ts` (sky, fog, sun shadows that follow the player), `cameraRig.ts`, `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each.
+  - `ui/`: HUD, F3 debug overlay, controls hint and CSS.
+  - `net/`: talking to the game server.
+  - `dev/`: developer pages that aren't part of the build, e.g. `/dev/dinos.html`.
 - **Multiplayer (from M3):** the client sends inputs (sequence number, direction, sprint, ability). The server simulates at `NETWORK.tickRate` and sends state patches filtered to `NETWORK.interestRadius`, with fern hiding enforced there. The client predicts its own dino with the shared step function and reconciles against the server. Other dinos are interpolated `NETWORK.interpolationDelayMs` in the past.
 
 ## Conventions
 
 - **TypeScript strict everywhere.** No `any`; the type-aware lint rules catch it. Use `import type` for type-only imports.
-- **Tuning numbers live in `shared/config.ts`.** That covers every gameplay and network number: grouped `as const` objects with a one-line note each. Purely technical constants, like a fetch timeout, can be named constants next to the code that uses them.
+- **Tuning numbers live in `shared/config.ts`.** That covers every gameplay, network, camera and control-feel number: grouped `as const` objects with a one-line note each. Level design (positions and sizes of landmarks) lives in `shared/world/layout.ts`. Art (colours, shapes) stays next to the rendering code. Purely technical constants, like a fetch timeout, can be named constants next to the code that uses them.
+- **Units and directions:**
+  - The island is centred on the origin, with +y up.
+  - A heading of 0 faces +z, and increasing heading turns left (counter-clockwise seen from above); `object.rotation.y = heading` lines a model up.
+  - `turn` input runs from -1 (full right) to 1 (full left).
+  - Sizes such as the bite zone, camera distances and models are in body scales (1 = a newly spawned dinosaur); `scaleForMass` turns mass into scale.
 - **Use explicit `.ts` extensions in relative imports** (`import { x } from './y.ts'`). Node runs `server/` and `shared/` directly with its built-in TypeScript support (no build step) and needs them. Do the same in `client/` for consistency.
 - **Erasable syntax only** (`erasableSyntaxOnly`). Node strips types but can't compile, so use no enums (use `as const` objects with union types), namespaces, parameter properties or decorators. Define Colyseus state with `@colyseus/schema`'s `schema()` / `t` builders, not `@type()` decorators.
 - **Tests:** Vitest unit tests sit next to the code as `*.test.ts`; browser tests go in `e2e/`. New logic in `shared/` and `server/` comes with tests. Never skip or disable a failing test to get green.
+- **Browser tests run without a GPU** (in CI and cloud sessions), so Chromium renders in software at roughly 4–12 FPS.
+  - Never make an e2e test depend on wall-clock durations. Hold an input until the game state changes, as `holdUntil` in `e2e/controls.spec.ts` does.
+  - Frame rates measured there mean nothing. Judge performance by the overlay's CPU time, draw calls and triangles, and check FPS on real hardware.
+  - Anything integrated over frame time must stay stable at long frames: frames are clamped to 0.25 s, and springs are sub-stepped (see `cameraRig.ts`).
+- **Debug hooks:**
+  - URL options: `?seed=` (repeatable island and spawn), `?mass=`, `?debug` (open the F3 overlay) and `?quality=low|medium|high`.
+  - `window.__extinct` provides `state()`, `stats()`, `setMass()` and `placeEggAhead()` for tests and the console. Debug hooks only ever touch the offline sandbox, never the server.
 - **Dependencies:** as few as possible. Explain why before adding one. Ask before changing the stack, buying assets or signing up for paid services.
 - **Secrets:** `.env` is git-ignored. Update `.env.example` whenever you add a variable. Browser-visible variables must start with `VITE_` and must never hold secrets.
 - **Assets and sounds:** CC0 or properly licensed only, recorded in `CREDITS.md` before committing.

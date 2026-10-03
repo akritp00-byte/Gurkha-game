@@ -9,8 +9,8 @@ The brief, game rules and milestone plan are in [BUILD_PROMPT.md](BUILD_PROMPT.m
 | Milestone                     | Status  |
 | ----------------------------- | ------- |
 | M0 Project setup              | Done    |
-| M1 Single-player sandbox      | Next    |
-| M2 Core rules offline         | Planned |
+| M1 Single-player sandbox      | Done    |
+| M2 Core rules offline         | Next    |
 | M3 Multiplayer                | Planned |
 | M4 Round loop                 | Planned |
 | M5 Art pass                   | Planned |
@@ -28,7 +28,15 @@ pnpm install
 pnpm dev               # client and game server together
 ```
 
-Open http://localhost:5173. The badge at the bottom shows whether the client can reach the game server on port 2567.
+Open http://localhost:5173 and you're dropped onto the island as a tiny Compsognathus. Run into eggs to eat them and grow; at 40 mass you evolve into a Velociraptor.
+
+| Device  | Controls                                                                                  |
+| ------- | ----------------------------------------------------------------------------------------- |
+| Desktop | W or ↑ to run, A/D or ←/→ to turn, S or ↓ to stop; or hold the left mouse button to steer |
+| Phone   | Drag anywhere on the left half of the screen (a joystick appears under your thumb)        |
+| Any     | F3 opens the debug overlay: FPS, draw calls, ping and entity counts                       |
+
+URL options for trying things out: `?seed=42` gives a fixed egg layout and spawn point, `?mass=1600` starts you as a T-Rex, `?debug` opens the overlay, and `?quality=low|medium|high` overrides the graphics preset. While `pnpm dev` runs, http://localhost:5173/dev/dinos.html shows every tier's placeholder dinosaur side by side.
 
 To change ports or point the client at another server, copy `.env.example` to `.env` and edit it.
 
@@ -60,14 +68,21 @@ CI (GitHub Actions) runs the format check, lint, type-check, unit tests, build a
 ## Project layout
 
 ```text
-client/        Three.js + Vite browser client
-  render/      scene, camera and effects
-  net/         talking to the game server
-  ui/          HUD, menus and styles
-server/        Colyseus game server: authoritative simulation
-shared/        rules and constants used by both sides
-  config.ts    every tuning number
-e2e/           Playwright browser tests
+client/          Three.js + Vite browser client
+  game/          the offline sandbox: runs the shared simulation and draws it
+  input/         keyboard, mouse and touch steering
+  render/        terrain, sky, plants, eggs, dinosaurs (dino/) and the camera
+  net/           talking to the game server
+  ui/            HUD, debug overlay, hints and styles
+  dev/           developer pages (not shipped)
+server/          Colyseus game server: authoritative simulation
+shared/          rules and constants used by both sides
+  config.ts      every tuning number
+  movement.ts    the movement step function
+  tiers.ts       tiers and body scale
+  sim/           the game simulation (dinosaurs, eggs, eating)
+  world/         the island: layout and terrain heights
+e2e/             Playwright browser tests
 ```
 
 Asset (`client/assets/`) and audio (`client/audio/`) folders arrive with milestones 5 and 6.

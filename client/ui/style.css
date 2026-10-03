@@ -9,6 +9,9 @@
   --ink: #fff8ec;
   --accent: #ffb347;
   --panel: rgb(16 28 20 / 0.55);
+  --safe-top: max(12px, env(safe-area-inset-top));
+  --safe-bottom: max(12px, env(safe-area-inset-bottom));
+  --safe-left: max(12px, env(safe-area-inset-left));
 }
 
 *,
@@ -22,9 +25,10 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #9bd8ff;
+  background: #cdeeff;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 #app {
@@ -39,65 +43,163 @@ body {
   touch-action: none;
 }
 
-.title {
+/* Everything drawn over the game ignores the pointer, so steering always reaches the canvas. */
+#ui {
   position: absolute;
-  top: max(16px, env(safe-area-inset-top));
-  left: 16px;
-  right: 16px;
-  text-align: center;
-  color: var(--ink);
-  text-shadow: 0 3px 0 rgb(0 0 0 / 0.25);
+  inset: 0;
   pointer-events: none;
+  color: var(--ink);
 }
 
-.logo {
-  margin: 0;
-  font-size: clamp(2.5rem, 10vw, 5rem);
-  font-weight: 900;
-  letter-spacing: 0.02em;
-  line-height: 1;
+[hidden] {
+  display: none !important;
 }
 
-.logo span {
-  color: var(--accent);
+/* --- HUD ------------------------------------------------------------------ */
+
+.hud {
+  position: absolute;
+  left: var(--safe-left);
+  bottom: var(--safe-bottom);
+  min-width: 190px;
+  padding: 10px 14px 12px;
+  border-radius: 14px;
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  text-shadow: 0 1px 0 rgb(0 0 0 / 0.3);
 }
 
-.tagline {
-  margin: 0.5rem 0 0;
-  font-size: clamp(0.9rem, 3.5vw, 1.15rem);
-  font-weight: 700;
+.hud-species {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
 }
 
-.server-status {
+.hud-mass {
+  margin-top: 2px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.hud-progress {
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.18);
+  overflow: hidden;
+}
+
+.hud-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7ed957, var(--accent));
+  transition: width 0.25s ease-out;
+}
+
+.hud-next {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+/* --- Controls hint ------------------------------------------------------------ */
+
+.controls-hint {
   position: absolute;
   left: 50%;
-  bottom: max(16px, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+  bottom: calc(var(--safe-bottom) + 4px);
+  max-width: calc(100% - 32px);
   margin: 0;
-  padding: 0.45rem 0.95rem;
+  padding: 8px 14px;
+  transform: translateX(-50%);
   border-radius: 999px;
   background: var(--panel);
-  color: var(--ink);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
+  text-align: center;
+  transition: opacity 0.6s ease;
 }
 
-.server-status::before {
-  content: '';
-  display: inline-block;
-  width: 0.6em;
-  height: 0.6em;
-  margin-right: 0.5em;
+.controls-hint.hidden {
+  opacity: 0;
+}
+
+@media (max-width: 640px) {
+  .controls-hint {
+    bottom: auto;
+    top: var(--safe-top);
+  }
+}
+
+/* --- Debug overlay (F3) ---------------------------------------------------------- */
+
+.debug-overlay {
+  position: absolute;
+  top: var(--safe-top);
+  left: var(--safe-left);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.6);
+  font:
+    12px/1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.debug-overlay pre {
+  margin: 0;
+  font: inherit;
+}
+
+.debug-overlay [data-status='online'] {
+  color: #7ed957;
+}
+
+.debug-overlay [data-status='offline'] {
+  color: #ff7a6b;
+}
+
+/* --- Touch joystick -------------------------------------------------------------- */
+
+.joystick {
+  position: absolute;
+  width: calc(var(--joystick-radius) * 2);
+  height: calc(var(--joystick-radius) * 2);
+  margin: calc(var(--joystick-radius) * -1) 0 0 calc(var(--joystick-radius) * -1);
+  border: 2px solid rgb(255 255 255 / 0.5);
   border-radius: 50%;
-  background: #f5c542;
+  background: rgb(0 0 0 / 0.18);
 }
 
-.server-status[data-status='online']::before {
-  background: #4cd964;
+.joystick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 52px;
+  height: 52px;
+  margin: -26px 0 0 -26px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.75);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.3);
 }
 
-.server-status[data-status='offline']::before {
-  background: #ff5a4f;
+/* --- Start-up failure ---------------------------------------------------------- */
+
+.fatal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100% - 32px));
+  margin: 0;
+  padding: 16px 20px;
+  transform: translate(-50%, -50%);
+  border-radius: 14px;
+  background: rgb(16 28 20 / 0.85);
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
 }

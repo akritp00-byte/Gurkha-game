@@ -14,6 +14,9 @@ export default defineConfig({
   use: {
     baseURL: CLIENT_URL,
     trace: 'retain-on-failure',
+    // Test machines have no GPU: opt in to software WebGL explicitly (Chrome is phasing out the
+    // automatic fallback). Frame rates measured this way say nothing about real hardware.
+    launchOptions: { args: ['--enable-unsafe-swiftshader'] },
   },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
