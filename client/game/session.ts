@@ -1,11 +1,12 @@
 import type {
   DangerZoneId,
-  EggSlot,
   HappeningKind,
+  MeatSize,
   NetEvent,
   PlayerInput,
   RoundPhase,
   RoundSettings,
+  ScrapSlot,
 } from '@extinct/shared';
 import type { PoseSample } from './poseHistory.ts';
 
@@ -49,6 +50,10 @@ export interface SessionCarcass {
   readonly size: number;
   readonly radius: number;
   readonly kind: 'kill' | 'event';
+  /** A kill is drawn as the victim's body: its mass when it died. 0 for an event carcass. */
+  readonly bodyMass: number;
+  /** An event carcass's species (an index into CARCASS_SPECIES). */
+  readonly variant: number;
   readonly carrierId: number | null;
 }
 
@@ -88,6 +93,7 @@ export interface SessionMeat {
   readonly id: number;
   readonly x: number;
   readonly z: number;
+  readonly size: MeatSize;
   /** Seconds since it was dropped. */
   readonly age: number;
 }
@@ -101,11 +107,17 @@ export interface SessionCritter {
   readonly alive: boolean;
 }
 
-/** Something to react to: the server's events, plus egg changes worth animating. */
+/** Something to react to: the server's events, plus scrap changes worth animating. */
 export type SessionEvent =
   | NetEvent
-  | { readonly type: 'eggEaten'; readonly slot: number }
-  | { readonly type: 'eggSpawned'; readonly slot: number };
+  | { readonly type: 'scrapEaten'; readonly slot: number }
+  | { readonly type: 'scrapSpawned'; readonly slot: number };
+
+/**
+ * What a bot placed by a test does: carry on as normal (`roam`), stand `still` for a minute,
+ * or `hunt` the player single-mindedly, biting the moment it can.
+ */
+export type BotBehaviour = 'roam' | 'still' | 'hunt';
 
 export interface BotSummary {
   id: number;
@@ -127,13 +139,13 @@ export interface TestHooks {
   endProtection(): void;
   /** Start a world event `ahead` units in front of the player (or somewhere random). */
   startEvent(kind: HappeningKind, ahead?: number): void;
-  placeEggAhead?(distance: number): void;
+  placeScrapAhead?(distance: number): void;
   placeDinoAhead?(
     mass: number,
     distance: number,
     facing: 'toward' | 'away',
     side?: number,
-    still?: boolean,
+    behaviour?: BotBehaviour,
   ): number;
   bots?(): BotSummary[];
 }
@@ -147,8 +159,8 @@ export interface Session {
   /** The player's own dinosaur, once it exists. */
   readonly player: SessionDino | undefined;
   readonly dinos: ReadonlyMap<number, SessionDino>;
-  /** One slot per egg (FOOD.eggCount); online, eggs out of view read as not alive. */
-  readonly eggs: readonly EggSlot[];
+  /** One slot per scrap (SCRAPS.count); online, scraps out of view read as not alive. */
+  readonly scraps: readonly ScrapSlot[];
   readonly meat: ReadonlyMap<number, SessionMeat>;
   /** Indexed by critter id. */
   readonly critters: readonly SessionCritter[];

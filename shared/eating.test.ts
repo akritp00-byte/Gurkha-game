@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BITING, CARCASS, EATING, MASS, ROUND } from './config.ts';
+import { BITING, CARCASS, EATING, MASS, MEAT_SIZES, ROUND } from './config.ts';
 import {
   attackZone,
   biteReach,
@@ -88,7 +88,7 @@ describe('the eat rule', () => {
 
 describe('biting and carcasses', () => {
   function arena() {
-    const world = new GameWorld({ seed: 5, eggs: 0, critters: 0, happenings: false });
+    const world = new GameWorld({ seed: 5, scraps: 0, critters: 0, happenings: false });
     const eater = world.addPlayer('Eater');
     const victim = world.addPlayer('Victim');
     place(eater, 60, 0);
@@ -140,7 +140,8 @@ describe('biting and carcasses', () => {
       { type: 'dinoKilled', killerId: eater.id, victimId: victim.id, carcassId: carcass.id },
     ]);
     expect(events).toContainEqual({ type: 'bite', dinoId: eater.id, outcome: 'kill' });
-    expect(carcass).toMatchObject({ kind: 'kill', food: 7, carrierId: eater.id });
+    // Drawn as the victim's own body, at the size it died.
+    expect(carcass).toMatchObject({ kind: 'kill', food: 7, bodyMass: 10, carrierId: eater.id });
     expect(eater.carrying).toBe(true);
     expect(eater.mass).toBe(12); // nothing gained until it's eaten
     expect(victim.alive).toBe(false);
@@ -243,7 +244,7 @@ describe('biting and carcasses', () => {
   });
 
   it('lets several dinosaurs eat a carcass on the ground, too big to carry, until it is gone', () => {
-    const world = new GameWorld({ seed: 9, eggs: 0, critters: 0, happenings: false });
+    const world = new GameWorld({ seed: 9, scraps: 0, critters: 0, happenings: false });
     const happening = world.startHappening('carcass', [], { x: 60, z: 0 });
     const carcass = [...world.carcasses.values()][0];
     expect(happening?.kind).toBe('carcass');
@@ -263,6 +264,34 @@ describe('biting and carcasses', () => {
     world.step(TICK, pressing([a, EAT], [b, EAT]));
     expect(a.eating && b.eating).toBe(true);
     expect(start - carcass.food).toBeCloseTo(2 * eatRate(20) * TICK);
+  });
+
+  it('eats a big carcass from on top of it, not just from its edge', () => {
+    const world = new GameWorld({ seed: 9, scraps: 0, critters: 0, happenings: false });
+    world.startHappening('carcass', [], { x: 60, z: 0 });
+    const carcass = [...world.carcasses.values()][0];
+    const eater = world.addPlayer('Eater');
+    // Walked right across it: the mouth is already past the middle.
+    place(eater, 60, carcass.radius * 0.5, 0);
+    world.step(TICK, pressing([eater, EAT]));
+    expect(eater.eating).toBe(true);
+    expect(carcass.food).toBeLessThan(carcass.size);
+  });
+
+  it('eats meat it runs over even with a carcass in its mouth', () => {
+    const { world, eater, victim } = arena();
+    world.setMass(eater, 40);
+    intoMouth(eater, victim);
+    world.step(TICK, pressing([eater, BITE]));
+    expect(eater.carrying).toBe(true);
+    const mouth = biteCenter(eater, scaleForMass(eater.mass));
+    world.scraps.push({ x: mouth.x, z: mouth.z, size: 1, rich: false, alive: true, respawnIn: 0 });
+
+    const events = world.step(TICK, NO_INPUT);
+
+    expect(events).toContainEqual({ type: 'scrapEaten', dinoId: eater.id, slot: 0 });
+    expect(eater.mass).toBe(40 + MEAT_SIZES[1].mass);
+    expect(eater.carrying).toBe(true);
   });
 
   it('rots a carcass left on the ground, but not one being carried', () => {
@@ -344,7 +373,7 @@ describe('biting and carcasses', () => {
   });
 
   it('lets the biggest bite first, so nobody bites from inside a mouth', () => {
-    const world = new GameWorld({ seed: 6, eggs: 0, critters: 0, happenings: false });
+    const world = new GameWorld({ seed: 6, scraps: 0, critters: 0, happenings: false });
     const big = world.addPlayer('Big');
     const middle = world.addPlayer('Middle');
     const small = world.addPlayer('Small');

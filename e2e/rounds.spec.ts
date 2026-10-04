@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { DANGER_ZONES } from '../shared/config.ts';
 import {
   carcasses,
   gameState,
@@ -30,7 +31,8 @@ test.describe('rounds and events', () => {
     await expect(page.getByTestId('podium')).toBeVisible();
     const winners = await podium(page);
     expect(winners.map((winner) => winner.name)).toContain('You');
-    expect(winners[0]).toMatchObject({ name: 'You', mass: 300 });
+    expect(winners[0].name).toBe('You');
+    expect(winners[0].mass).toBeGreaterThanOrEqual(300); // plus whatever meat it gulped
     for (let place = 1; place < winners.length; place++) {
       expect(winners[place].mass).toBeLessThanOrEqual(winners[place - 1].mass);
     }
@@ -85,7 +87,9 @@ test.describe('rounds and events', () => {
   test('danger zones say what food is worth there', async ({ page }) => {
     await openGame(page);
     await teleport(page, -12, -8); // on the volcano's slopes, clear of the vents
-    await expect(page.getByTestId('hud-status')).toContainText('The Ashlands: food ×4');
+    await expect(page.getByTestId('hud-status')).toContainText(
+      `The Ashlands: food ×${DANGER_ZONES.foodMultiplier.ashlands}`,
+    );
     await teleport(page, -90, 60);
     await expect(page.getByTestId('hud-status')).not.toContainText('food ×');
     expect((await gameState(page)).alive).toBe(true);

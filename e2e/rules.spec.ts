@@ -33,7 +33,8 @@ test.describe('desktop', () => {
         page,
         (now) => now.sprinting && now.speed > speedForMass(now.mass) * 1.2 && now.stamina < 0.9,
       );
-      expect(state.mass).toBe(60);
+      // Sprinting costs no mass and drops no meat (it may gulp some meat on the way).
+      expect(state.mass).toBeGreaterThanOrEqual(60);
       expect(state.meat).toBe(0);
       await expect(page.getByTestId('hud-status')).toContainText('Sprinting');
     } finally {
@@ -49,7 +50,7 @@ test.describe('desktop', () => {
     await openGame(page, '&bots=1');
     await setMass(page, 40);
     await endProtection(page);
-    await placeDinoAhead(page, 10, 1.5, 'away', 0, true);
+    await placeDinoAhead(page, 10, 1.5, 'away', 0, 'still');
 
     const caught = captureFrames(page, [{ carrying: true }]);
     await clickToBite(page);
@@ -64,7 +65,7 @@ test.describe('desktop', () => {
       () => page.keyboard.down('KeyE'),
       () => page.keyboard.up('KeyE'),
     );
-    expect(fed.mass).toBeLessThan(48); // 40 + 7, plus maybe an egg
+    expect(fed.mass).toBeLessThan(48); // 40 + 7, plus maybe a scrap
     expect(fed.carrying).toBe(false);
     expect(errors).toEqual([]);
   });
@@ -91,7 +92,7 @@ test.describe('desktop', () => {
     await endProtection(page);
 
     const frames = captureFrames(page, [{ alive: false }, { alive: true }]);
-    await placeDinoAhead(page, 200, 1.5, 'toward');
+    await placeDinoAhead(page, 200, 1.5, 'toward', 0, 'hunt');
     const [dead, reborn] = await frames;
 
     expect(dead.state.eatenBy).not.toBeNull();
@@ -155,7 +156,7 @@ test.describe('touch', () => {
     await openGame(page, '&bots=1');
     await setMass(page, 40);
     await endProtection(page);
-    await placeDinoAhead(page, 10, 1.5, 'away', 0, true);
+    await placeDinoAhead(page, 10, 1.5, 'away', 0, 'still');
 
     const caught = captureFrames(page, [{ carrying: true }]);
     await page.getByTestId('bite-button').tap();

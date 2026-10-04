@@ -1,5 +1,6 @@
-import { BITE, BITING, BODY, CARCASS, EATING } from './config.ts';
+import { BITE, BITING, BODY, CARCASS, EATING, MEAT_SIZES } from './config.ts';
 import { biteCenter, type Motion } from './movement.ts';
+import type { MeatSize } from './sim/entities.ts';
 import { scaleForMass } from './tiers.ts';
 
 /** Whether a dinosaur of `eaterMass` is big enough to eat one of `victimMass`: at least 1.2×. */
@@ -66,6 +67,16 @@ export function biteTouches(
   radius: number,
 ): boolean {
   return zoneTouches(biteZone(eater, eaterMass), x, z, radius);
+}
+
+/** Mass a piece of meat of this size is worth on ordinary ground (see `foodMultiplierAt`). */
+export function meatMass(size: MeatSize): number {
+  return MEAT_SIZES[size].mass;
+}
+
+/** How close a mouth has to come to eat a piece of meat of this size. */
+export function meatRadius(size: MeatSize): number {
+  return MEAT_SIZES[size].radius;
 }
 
 /** Food in a kill's carcass: 70% of the victim's mass (BUILD_PROMPT.md §3). */

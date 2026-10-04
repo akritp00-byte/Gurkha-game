@@ -75,17 +75,43 @@ export const CARCASS = {
   eatingSpeedFactor: 0.5,
   /** A kill's carcass rots away after lying on the ground this long. */
   killLifetimeSeconds: 45,
-  /** A kill's carcass is this many times the victim's body radius, for biting and eating it. */
-  killRadiusScale: 1.25,
+  /**
+   * A kill's carcass is this many times the victim's body radius, for biting and eating it: the
+   * body lies on its side, tail and neck stretched out, so it covers more ground than it did.
+   */
+  killRadiusScale: 2,
 } as const;
 
 /** Mass gained from each kind of food, before any danger-zone bonus (see DANGER_ZONES). */
 export const FOOD_MASS = {
-  egg: 1,
-  /** Scattered by world events. */
-  meat: 2,
   /** Small fleeing NPCs. */
   critter: 4,
+} as const;
+
+/**
+ * Meat lying on the island comes in three sizes. Each size's mass is before any danger-zone
+ * bonus, and its radius is how close a mouth has to come to eat it.
+ */
+export const MEAT_SIZES = [
+  { name: 'scrap', mass: 1, radius: 0.25 },
+  { name: 'cut', mass: 3, radius: 0.34 },
+  { name: 'haunch', mass: 8, radius: 0.48 },
+] as const;
+
+/** Scraps of meat lying about the island: the everyday food. An eaten one reappears elsewhere. */
+export const SCRAPS = {
+  count: 260,
+  respawnSeconds: 3,
+  /**
+   * This share of the scraps always lies in the danger zones, so they're visibly richer. Being
+   * worth so much, they take longer to come back.
+   */
+  dangerZoneShare: 0.06,
+  richRespawnSeconds: 45,
+  /** How likely each meat size is (MEAT_SIZES order) on ordinary ground... */
+  sizeWeights: [0.66, 0.26, 0.08],
+  /** ...and in the danger zones, where big pieces are common. */
+  dangerSizeWeights: [0.3, 0.42, 0.28],
 } as const;
 
 /**
@@ -94,7 +120,7 @@ export const FOOD_MASS = {
  */
 export const DANGER_ZONES = {
   /** Food lying in each zone is worth this many times its usual mass, and events there are this much bigger. */
-  foodMultiplier: { ashlands: 4, tarPits: 3 },
+  foodMultiplier: { ashlands: 5, tarPits: 4 },
 } as const;
 
 /**
@@ -103,14 +129,14 @@ export const DANGER_ZONES = {
  */
 export const WORLD_EVENTS = {
   /** The first event comes this long into a round, then one every `interval` seconds. */
-  firstAfterSeconds: 20,
-  intervalSeconds: { min: 25, max: 45 },
+  firstAfterSeconds: 30,
+  intervalSeconds: { min: 35, max: 60 },
   /** At most this many events running at once. */
-  maxActive: 3,
+  maxActive: 4,
   /** Chance that an event lands in a danger zone (and is bigger for it). */
   dangerZoneChance: 0.5,
   /** Events grow through the round: by the meteor they're this much bigger again. */
-  lateRoundBonus: 1.5,
+  lateRoundBonus: 2,
   /** Events keep at least this far from each other. */
   spacing: 25,
   /** Which kind of event happens, by weight. */
@@ -120,30 +146,23 @@ export const WORLD_EVENTS = {
     food: { min: 50, max: 90 },
     /** Radius of a carcass holding `food.max`; bigger ones grow with the cube root of their food. */
     radius: 2.4,
-    lifetimeSeconds: 120,
+    lifetimeSeconds: 180,
   },
   meatDrop: {
     chunks: { min: 10, max: 16 },
     /** Chunks land within this distance of the event's centre. */
     scatterRadius: 7,
+    /** How likely each meat size is (MEAT_SIZES order): drops are mostly good cuts. */
+    sizeWeights: [0.25, 0.5, 0.25],
   },
-} as const;
-
-/** Food on the island. */
-export const FOOD = {
-  /** Eggs on the island at any time. An eaten egg reappears somewhere else. */
-  eggCount: 260,
-  eggRespawnSeconds: 3,
-  eggRadius: 0.25,
 } as const;
 
 /** Meat chunks scattered by world events. */
 export const MEAT = {
-  /** Meat rots away after this long. */
-  lifetimeSeconds: 30,
+  /** Meat rots away after this long, long enough to cross the island for it. */
+  lifetimeSeconds: 60,
   /** When the island holds this many chunks, the oldest one disappears. */
   maxChunks: 300,
-  radius: 0.22,
 } as const;
 
 /** Small fleeing critters: quick snacks that a hungry dinosaur can run down. */
@@ -152,9 +171,9 @@ export const CRITTERS = {
   radius: 0.25,
   wanderSpeed: 2.2,
   /** Slower than a fresh Compsognathus or a young Velociraptor, so they can be caught. */
-  fleeSpeed: 6.2,
+  fleeSpeed: 5.6,
   /** Critters bolt when a dinosaur comes this close. */
-  fearRadius: 8,
+  fearRadius: 6,
   /** Radians per second. */
   turnRate: 4.5,
   /** Fleeing critters zigzag this far either side of straight away (radians), this fast. */
@@ -187,19 +206,19 @@ export const BODY = {
 } as const;
 
 /**
- * Movement (BUILD_PROMPT.md §3, "Movement"):
- * speed = baseSpeed × (referenceMass / mass) ^ speedExponent, never below minSpeed.
- * Turning follows a similar curve: baseTurnRate × (referenceMass / mass) ^ turnExponent
- * radians per second, never below minTurnRate.
+ * Movement. Bigger dinosaurs are a little faster, so a lead snowballs (a change from the
+ * brief, which made them slower): speed = baseSpeed × (mass / referenceMass) ^ speedExponent,
+ * never above maxSpeed. Small ones keep the edge in turning: baseTurnRate ×
+ * (referenceMass / mass) ^ turnExponent radians per second, never below minTurnRate.
  */
 export const MOVEMENT = {
   baseSpeed: 9,
   referenceMass: 10,
-  speedExponent: 0.18,
-  minSpeed: 4.5,
+  speedExponent: 0.06,
+  maxSpeed: 13,
   baseTurnRate: 3.5,
-  turnExponent: 0.22,
-  minTurnRate: 1.2,
+  turnExponent: 0.18,
+  minTurnRate: 1.3,
   /** Seconds to reach full speed from standing still, and to stop from full speed. */
   accelerationSeconds: 0.3,
   decelerationSeconds: 0.2,
@@ -272,9 +291,10 @@ export const FERNS = {
 
 /** Round loop (BUILD_PROMPT.md §3, "Round loop"). */
 export const ROUND = {
-  durationSeconds: 300,
-  /** The sky turns red, the ground rumbles and debris falls from this point on. */
-  meteorWarningAtSeconds: 240,
+  /** Twenty minutes: long enough to grow from hatchling to T-Rex. */
+  durationSeconds: 1200,
+  /** The sky turns red, the ground rumbles and debris falls for the last two minutes. */
+  meteorWarningAtSeconds: 1080,
   impactSequenceSeconds: 3,
   /** Podium time before the next round starts. */
   intermissionSeconds: 10,
@@ -294,51 +314,66 @@ export const ROOM = {
   minDinosaurs: 16,
 } as const;
 
-/** Bot behaviour (BUILD_PROMPT.md §3, "Rooms and bots"). Bots must never feel perfect. */
+/**
+ * Bot behaviour (BUILD_PROMPT.md §3, "Rooms and bots"). Bots must never feel perfect, and
+ * they're tuned to be beatable: slow to react, easily distracted, lazy hunters that never sprint
+ * after prey, wary of the danger zones, and late to notice a threat.
+ */
 export const BOTS = {
   /** Bots decide this often, like a human's reaction time. Skilled bots react faster. */
-  reactionDelayMs: { min: 200, max: 500 },
+  reactionDelayMs: { min: 350, max: 750 },
   /** Each bot gets a skill from this range: 0 is clumsy and inattentive, 1 is sharp. */
-  skill: { min: 0.15, max: 0.9 },
+  skill: { min: 0.05, max: 0.6 },
   /** How far bots notice food and prey: base distance plus extra per body scale. */
-  sightRange: 34,
-  sightPerScale: 4,
+  sightRange: 26,
+  sightPerScale: 3,
   /** A bot flees from a threat whose bite comes closer than this (further for skilled bots). */
-  fleeRange: 20,
-  /** Bots sprint after prey, or away from a threat, once the gap to the bite is this small. */
-  sprintRange: 8,
+  fleeRange: 16,
+  /** Fleeing bots sprint once the threat's bite is this close. Bots never sprint after prey. */
+  sprintRange: 5,
   /** Food and prey are scored as mass gained / (distance + this), so nearby food wins. */
   distanceBias: 4,
+  /** Bots would mostly rather eat than fight: prey scores this fraction of its worth. */
+  preyAppeal: 0.35,
+  /**
+   * Bots heavier than this stop hunting and only graze and scavenge, so no bot runs away with
+   * the round by eating everyone else; the top of the leaderboard is for players to fight over.
+   */
+  maxHuntingMass: 250,
   /** Critters run away, so bots value them at this fraction of their mass. */
   critterAppeal: 0.5,
   /** ...and at this fraction once a critter is fleeing faster than the bot can run. */
   fleeingCritterAppeal: 0.15,
+  /** Bots are wary of the danger zones: food there is worth this fraction of its plain mass to them. */
+  dangerZoneAppeal: 0.1,
+  /** Bots amble after food and prey at this throttle; only fleeing gets full speed. */
+  cruiseThrottle: 0.85,
   /** A bot gives up a chase after this long and leaves hunting alone for a while. */
-  chaseGiveUpSeconds: 7,
-  huntCooldownSeconds: 4,
+  chaseGiveUpSeconds: 4,
+  huntCooldownSeconds: 10,
   /** Small bots that are fleeing run for a fern patch within this distance. */
   fernSeekRange: 35,
   /** Wandering bots stroll to a spot this far away. */
   wanderDistance: { min: 15, max: 45 },
   /** Largest random steering error, in radians, for the clumsiest bot. */
-  maxSteeringWobble: 0.45,
+  maxSteeringWobble: 0.6,
   /** How hard bots steer towards their goal, from the clumsiest to the sharpest. */
-  steeringGain: { min: 1.2, max: 3.5 },
+  steeringGain: { min: 1.1, max: 3 },
   /** How far ahead bots look out for tar pits and the crater, from the clumsiest to the sharpest. */
   hazardLookahead: { min: 4, max: 12 },
   /** Chance per decision that a bot gets distracted and wanders off, ignoring everything. */
-  distractionChance: 0.04,
-  distractionSeconds: { min: 1, max: 2.5 },
+  distractionChance: 0.08,
+  distractionSeconds: { min: 1.5, max: 3.5 },
   /**
    * How alert bots are to threats: the flee range is scaled by this, from the clumsiest to the
    * sharpest, so clumsy bots notice danger late.
    */
-  alertness: { min: 0.45, max: 1.1 },
+  alertness: { min: 0.3, max: 0.8 },
   /** Chance per tick that a bot bites when its prey is in reach, from the clumsiest to the sharpest. */
-  biteChance: { min: 0.25, max: 0.8 },
+  biteChance: { min: 0.03, max: 0.12 },
   /** Bots value a world-event carcass at this fraction of its food, and hear about it from this far. */
-  eventCarcassAppeal: 0.5,
-  eventHearingRange: 140,
+  eventCarcassAppeal: 0.3,
+  eventHearingRange: 80,
   /** Bots only bother sprinting while they have at least this much stamina. */
   minSprintStamina: 0.2,
 } as const;
@@ -374,7 +409,7 @@ export const NETWORK = {
   defaultServerPort: 2567,
   /** Entities leave a client's view only beyond interestRadius plus this, so nothing flickers at the edge. */
   interestHysteresis: 8,
-  /** Eggs and meat hardly move, so each client's view of them is refreshed only every this many ticks. */
+  /** Scraps and meat hardly move, so each client's view of them is refreshed only every this many ticks. */
   slowViewRefreshTicks: 5,
   /**
    * Inputs the server queues per client before dropping the oldest: at most this many ticks

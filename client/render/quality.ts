@@ -9,6 +9,8 @@ export interface QualitySettings {
   readonly shadowMapSize: number;
   /** Multiplier on the number of decorative plants and rocks. */
   readonly vegetationDensity: number;
+  /** Bloom post-processing (with multisampling). */
+  readonly bloom: boolean;
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
@@ -19,6 +21,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadows: false,
     shadowMapSize: 512,
     vegetationDensity: 0.5,
+    bloom: false,
   },
   medium: {
     level: 'medium',
@@ -27,6 +30,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadows: true,
     shadowMapSize: 1024,
     vegetationDensity: 0.75,
+    bloom: false,
   },
   high: {
     level: 'high',
@@ -35,6 +39,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualitySettings> = {
     shadows: true,
     shadowMapSize: 2048,
     vegetationDensity: 1,
+    bloom: true,
   },
 };
 

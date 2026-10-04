@@ -21,7 +21,7 @@ export interface GameState {
   rank: number;
   hidden: boolean;
   eatenBy: string | null;
-  eggsAlive: number;
+  scrapsAlive: number;
   meat: number;
   carcasses: number;
   dinosAlive: number;
@@ -61,13 +61,14 @@ interface DebugWindow {
     others(): OtherDino[];
     stats(): { fps: number; cpuMs: number; drawCalls: number; triangles: number };
     setMass(mass: number): void;
-    placeEggAhead(distance: number): void;
+    placeScrapAhead(distance: number): void;
+    triangleBreakdown(): { name: string; triangles: number }[];
     placeDinoAhead(
       mass: number,
       distance: number,
       facing: 'toward' | 'away',
       side?: number,
-      still?: boolean,
+      behaviour?: 'roam' | 'still' | 'hunt',
     ): number;
     teleport(x: number, z: number, heading?: number): void;
     endProtection(): void;
@@ -82,8 +83,19 @@ interface DebugWindow {
  * Open the offline sandbox with a fixed island seed and wait for the first rendered frame. By
  * default the island has no bots, so nothing wanders in and eats the dinosaur mid-test.
  */
-export async function openGame(page: Page, query = '&bots=0'): Promise<void> {
-  await page.goto(`/?offline&seed=42${query}`);
+/**
+ * Open the offline sandbox. Tests play on the medium preset unless they ask otherwise: with no
+ * GPU, the high preset's bloom makes every frame several times slower, and they test the game,
+ * not the graphics. `quality: 'auto'` lets the game choose, as it would for a player.
+ */
+export async function openGame(
+  page: Page,
+  query = '&bots=0',
+  options: { quality?: 'low' | 'medium' | 'high' | 'auto' } = {},
+): Promise<void> {
+  const quality = options.quality ?? 'medium';
+  const preset = quality === 'auto' ? '' : `&quality=${quality}`;
+  await page.goto(`/?offline&seed=42${preset}${query}`);
   await expect(page.locator('#game')).toHaveAttribute('data-ready', 'true');
 }
 
@@ -100,6 +112,8 @@ export async function openOnlineGame(
     name: options.name,
     bots: String(options.bots ?? 0),
     seed: '42',
+    // Two software-rendered tabs at once: the low preset keeps their frame rates up.
+    quality: 'low',
   });
   if (options.round !== undefined) query.set('round', String(options.round));
   await page.goto(`/?${query.toString()}`);
@@ -126,9 +140,14 @@ export function setMass(page: Page, mass: number): Promise<void> {
   }, mass);
 }
 
-export function placeEggAhead(page: Page, distance: number): Promise<void> {
+/** Triangles each part of the scene draws, biggest first. */
+export function triangleBreakdown(page: Page): Promise<{ name: string; triangles: number }[]> {
+  return page.evaluate(() => (window as unknown as DebugWindow).__extinct.triangleBreakdown());
+}
+
+export function placeScrapAhead(page: Page, distance: number): Promise<void> {
   return page.evaluate((d) => {
-    (window as unknown as DebugWindow).__extinct.placeEggAhead(d);
+    (window as unknown as DebugWindow).__extinct.placeScrapAhead(d);
   }, distance);
 }
 
@@ -157,7 +176,8 @@ export function threatsAfterPlacing(
 
 /**
  * Put a bot of `mass` this far ahead of the player, facing `toward` it or `away`. A `still` bot
- * stands there doing nothing, so a slow test page can't miss it.
+ * stands there doing nothing, so a slow test page can't miss it; a `hunt` bot goes straight for
+ * the player and bites on sight (ordinary bots would rather eat than fight).
  */
 export function placeDinoAhead(
   page: Page,
@@ -165,12 +185,12 @@ export function placeDinoAhead(
   distance: number,
   facing: 'toward' | 'away',
   side = 0,
-  still = false,
+  behaviour: 'roam' | 'still' | 'hunt' = 'roam',
 ): Promise<number> {
   return page.evaluate(
     ([m, d, f, s, st]) =>
       (window as unknown as DebugWindow).__extinct.placeDinoAhead(m, d, f, s, st),
-    [mass, distance, facing, side, still] as const,
+    [mass, distance, facing, side, behaviour] as const,
   );
 }
 
@@ -226,11 +246,12 @@ export async function holdUntil(
   check: (state: GameState) => boolean,
   press: () => Promise<void>,
   release: () => Promise<void>,
+  timeout = 15_000,
 ): Promise<GameState> {
   await press();
   try {
     await expect
-      .poll(async () => check(await gameState(page)), { timeout: 15_000, intervals: [100] })
+      .poll(async () => check(await gameState(page)), { timeout, intervals: [100] })
       .toBe(true);
   } finally {
     await release();
@@ -251,6 +272,8 @@ export interface CaptureCondition {
   alive?: boolean;
   minMass?: number;
   carrying?: boolean;
+  /** The death card is on screen. */
+  deathCard?: boolean;
 }
 
 /**
@@ -278,13 +301,14 @@ export function captureFrames(
         });
       const deadline = performance.now() + timeout;
       const captures: Capture[] = [];
-      for (const { alive, minMass, carrying } of wanted) {
+      for (const { alive, minMass, carrying, deathCard } of wanted) {
         for (;;) {
           const state = api.state();
           const matches =
             (alive === undefined || state.alive === alive) &&
             (minMass === undefined || state.mass >= minMass) &&
-            (carrying === undefined || state.carrying === carrying);
+            (carrying === undefined || state.carrying === carrying) &&
+            (deathCard === undefined || (text('death-screen') !== null) === deathCard);
           if (matches) {
             captures.push({
               state,
@@ -295,7 +319,8 @@ export function captureFrames(
             break;
           }
           if (performance.now() > deadline) {
-            throw new Error(`no frame matched ${JSON.stringify({ alive, minMass, carrying })}`);
+            const condition = { alive, minMass, carrying, deathCard };
+            throw new Error(`no frame matched ${JSON.stringify(condition)}`);
           }
           await nextFrame();
         }

@@ -4,6 +4,7 @@ import {
   biteReach,
   bodyRadius,
   massGained,
+  meatMass,
   outweighs,
   zoneTouches,
 } from '../eating.ts';
@@ -13,14 +14,15 @@ import { type Random, randomRange } from '../random.ts';
 import { scaleForMass, tierForMass } from '../tiers.ts';
 import { canSee } from '../visibility.ts';
 import { type CircleArea, FERN_PATCHES, TAR_PITS, VOLCANO } from '../world/layout.ts';
-import { foodMultiplierAt } from '../world/terrain.ts';
+import { dangerZoneAt } from '../world/terrain.ts';
 import type { Carcass, Dino, WorldSenses } from './entities.ts';
 
 /**
  * Bots (BUILD_PROMPT.md §3, "Rooms and bots"): they wander, look for food, hunt smaller
  * dinosaurs, bite and eat them, crowd round world-event carcasses and flee bigger dinosaurs.
- * They only decide every 200–500 ms, misjudge food, steer with a wobble, bite at the wrong
- * moment, get distracted and give up long chases, so they never feel perfect.
+ * They only decide every 350–750 ms, misjudge food, steer with a wobble, bite at the wrong
+ * moment, get distracted, amble after prey without sprinting and soon give up a chase, so
+ * they never feel perfect and a player can always beat them.
  */
 
 export type BotMode = 'wander' | 'food' | 'hunt' | 'flee' | 'hide' | 'feed';
@@ -51,6 +53,9 @@ export interface BotBrain {
   distractedFor: number;
   /** Seconds to stand still and do nothing (tests freeze bots in place). */
   holdFor: number;
+  /** A dinosaur to hunt single-mindedly, and for how long (tests set this). */
+  fixatedOn: number | null;
+  fixatedFor: number;
   /** Steering error in radians. It drifts towards a new random target at every decision. */
   wobble: number;
   wobbleTarget: number;
@@ -93,6 +98,8 @@ export function createBotBrain(
     huntCooldown: 0,
     distractedFor: 0,
     holdFor: 0,
+    fixatedOn: null,
+    fixatedFor: 0,
     wobble: 0,
     wobbleTarget: 0,
   };
@@ -111,6 +118,8 @@ export function resetBrain(brain: BotBrain): void {
   brain.chaseSeconds = 0;
   brain.huntCooldown = 0;
   brain.distractedFor = 0;
+  brain.fixatedOn = null;
+  brain.fixatedFor = 0;
   brain.wobble = 0;
   brain.wobbleTarget = 0;
 }
@@ -128,6 +137,7 @@ export function botInput(
     return IDLE_INPUT;
   }
   brain.huntCooldown = Math.max(0, brain.huntCooldown - dt);
+  brain.fixatedFor = Math.max(0, brain.fixatedFor - dt);
   brain.distractedFor = Math.max(0, brain.distractedFor - dt);
   if (brain.mode === 'hunt') brain.chaseSeconds += dt;
   brain.thinkIn -= dt;
@@ -146,6 +156,13 @@ export function botInput(
 function decide(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random): void {
   brain.wobbleTarget = randomRange(random, -1, 1) * BOTS.maxSteeringWobble * (1 - brain.skill);
   brain.sprint = false;
+
+  const fixation = fixatedPrey(brain, senses);
+  if (fixation) {
+    brain.chaseSeconds = 0;
+    chase(brain, self, fixation);
+    return;
+  }
 
   if (brain.distractedFor <= 0 && random() < BOTS.distractionChance * (1 - brain.skill)) {
     brain.distractedFor = randomRange(
@@ -183,7 +200,7 @@ function decide(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random
   }
   if (food.score > 0) {
     brain.mode = 'food';
-    brain.throttle = 1;
+    brain.throttle = BOTS.cruiseThrottle;
     setGoal(brain, food.x, food.z);
     return;
   }
@@ -268,7 +285,9 @@ interface Prey {
 }
 
 function findPrey(brain: BotBrain, self: Dino, senses: WorldSenses): Prey | undefined {
-  if (brain.huntCooldown > 0 || self.protectedFor > 0) return undefined;
+  if (brain.huntCooldown > 0 || self.protectedFor > 0 || self.mass > BOTS.maxHuntingMass) {
+    return undefined;
+  }
   const sight = sightRange(brain, self);
   let best: Prey | undefined;
   for (const other of senses.dinos.values()) {
@@ -276,7 +295,7 @@ function findPrey(brain: BotBrain, self: Dino, senses: WorldSenses): Prey | unde
     if (!outweighs(self.mass, other.mass)) continue;
     const distance = Math.hypot(other.x - self.x, other.z - self.z);
     if (distance > sight || !canSee(self, other)) continue;
-    const score = massGained(other.mass) / (distance + BOTS.distanceBias);
+    const score = (massGained(other.mass) * BOTS.preyAppeal) / (distance + BOTS.distanceBias);
     if (!best || score > best.score) best = { dino: other, score };
   }
   return best;
@@ -296,8 +315,8 @@ function chase(brain: BotBrain, self: Dino, prey: Dino): boolean {
   const distance = Math.hypot(prey.x - self.x, prey.z - self.z);
   const lead = Math.min(distance / speedForMass(self.mass), 1) * brain.skill;
   brain.mode = 'hunt';
-  brain.throttle = 1;
-  brain.sprint = distance - biteReach(self.mass) < BOTS.sprintRange;
+  brain.throttle = BOTS.cruiseThrottle;
+  brain.sprint = false;
   setGoal(
     brain,
     prey.x + (Math.sin(prey.heading) * prey.speed + prey.pushX) * lead,
@@ -335,7 +354,7 @@ function goToCarcass(brain: BotBrain, self: Dino, carcass: Carcass): void {
   brain.carcassId = carcass.id;
   brain.mode = 'feed';
   const reachable = zoneTouches(attackZone(self, self.mass), carcass.x, carcass.z, carcass.radius);
-  brain.throttle = reachable ? 0 : 1;
+  brain.throttle = reachable ? 0 : BOTS.cruiseThrottle;
   setGoal(brain, carcass.x, carcass.z);
 }
 
@@ -360,11 +379,11 @@ function findFood(brain: BotBrain, self: Dino, senses: WorldSenses, random: Rand
     best.score = score;
   };
 
-  for (const egg of senses.eggs) {
-    if (egg.alive) consider(egg.x, egg.z, FOOD_MASS.egg * foodMultiplierAt(egg.x, egg.z));
+  for (const scrap of senses.scraps) {
+    if (scrap.alive) consider(scrap.x, scrap.z, meatMass(scrap.size) * wariness(scrap.x, scrap.z));
   }
   for (const chunk of senses.meat.values()) {
-    consider(chunk.x, chunk.z, FOOD_MASS.meat * foodMultiplierAt(chunk.x, chunk.z));
+    consider(chunk.x, chunk.z, meatMass(chunk.size) * wariness(chunk.x, chunk.z));
   }
   const speed = speedForMass(self.mass);
   for (const critter of senses.critters) {
@@ -376,11 +395,26 @@ function findFood(brain: BotBrain, self: Dino, senses: WorldSenses, random: Rand
       critter.x + Math.sin(critter.heading) * critter.speed * lead,
       critter.z + Math.cos(critter.heading) * critter.speed * lead,
       FOOD_MASS.critter *
-        foodMultiplierAt(critter.x, critter.z) *
+        wariness(critter.x, critter.z) *
         (outrun ? BOTS.fleeingCritterAppeal : BOTS.critterAppeal),
     );
   }
   return best;
+}
+
+/**
+ * How much bots want food at this spot, per unit of its plain mass: they shy away from the
+ * danger zones and ignore the bonus there, which leaves the rich food to players.
+ */
+function wariness(x: number, z: number): number {
+  return dangerZoneAt(x, z) === null ? 1 : BOTS.dangerZoneAppeal;
+}
+
+/** The dinosaur a test told this bot to hunt, while it's still alive and the order stands. */
+function fixatedPrey(brain: BotBrain, senses: WorldSenses): Dino | undefined {
+  if (brain.fixatedFor <= 0 || brain.fixatedOn === null) return undefined;
+  const prey = senses.dinos.get(brain.fixatedOn);
+  return prey?.alive ? prey : undefined;
 }
 
 function wander(brain: BotBrain, self: Dino, random: Random): void {
@@ -472,10 +506,17 @@ function act(
   for (const other of senses.dinos.values()) {
     if (other.id === self.id || !other.alive || other.protectedFor > 0) continue;
     if (!zoneTouches(zone, other.x, other.z, bodyRadius(other.mass))) continue;
-    if (outweighs(self.mass, other.mass)) target = 'prey';
-    else if (eat && !outweighs(other.mass, self.mass)) target ??= 'rival';
+    if (outweighs(self.mass, other.mass)) {
+      if (self.mass <= BOTS.maxHuntingMass) target = 'prey';
+    } else if (eat && !outweighs(other.mass, self.mass)) target ??= 'rival';
   }
   const chance = lerp(BOTS.biteChance.min, BOTS.biteChance.max, brain.skill);
+  const fixation = fixatedPrey(brain, senses);
+  if (fixation && outweighs(self.mass, fixation.mass)) {
+    // Told to hunt this one: bite the moment it's in reach.
+    const inReach = zoneTouches(zone, fixation.x, fixation.z, bodyRadius(fixation.mass));
+    if (inReach && fixation.protectedFor <= 0) return { bite: true, eat: false };
+  }
   const bite = target !== null && random() < (target === 'prey' ? chance : chance / 2);
   return { bite, eat: eat && !bite };
 }

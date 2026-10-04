@@ -3,11 +3,11 @@ import {
   CARCASS,
   CRITTERS,
   DANGER_ZONES,
-  FOOD,
   FOOD_MASS,
   MASS,
   MEAT,
   ROUND,
+  SCRAPS,
   VENTS,
   WORLD,
   WORLD_EVENTS,
@@ -22,6 +22,8 @@ import {
   eatRate,
   killCarcassRadius,
   massGained,
+  meatMass,
+  meatRadius,
   outweighs,
   zoneTouches,
 } from '../eating.ts';
@@ -59,10 +61,11 @@ import type {
   Carcass,
   Critter,
   Dino,
-  EggSlot,
+  ScrapSlot,
   Happening,
   HappeningKind,
   MeatChunk,
+  MeatSize,
   RoundState,
   WorldEvent,
   WorldSenses,
@@ -83,7 +86,7 @@ export interface GameWorldOptions {
   /** Bots to add straight away. */
   readonly bots?: number;
   /** Food on the island (tests turn it down to keep things predictable). */
-  readonly eggs?: number;
+  readonly scraps?: number;
   readonly critters?: number;
   readonly terrain?: Heightfield;
   /** Round timings (tests shorten rounds). */
@@ -94,7 +97,7 @@ export interface GameWorldOptions {
 
 /** Running totals, for tests and the debug overlay. */
 export interface WorldStats {
-  eggsEaten: number;
+  scrapsEaten: number;
   meatEaten: number;
   crittersEaten: number;
   dinosKilled: number;
@@ -125,7 +128,7 @@ function countDown(timer: number, dt: number): number {
 export class GameWorld implements WorldSenses {
   readonly terrain: Heightfield;
   readonly dinos = new Map<number, Dino>();
-  readonly eggs: EggSlot[] = [];
+  readonly scraps: ScrapSlot[] = [];
   /** Meat chunks in the order they landed, oldest first. */
   readonly meat = new Map<number, MeatChunk>();
   readonly critters: Critter[] = [];
@@ -134,7 +137,7 @@ export class GameWorld implements WorldSenses {
   readonly happenings = new Map<number, Happening>();
   readonly round: RoundState;
   readonly stats: WorldStats = {
-    eggsEaten: 0,
+    scrapsEaten: 0,
     meatEaten: 0,
     crittersEaten: 0,
     dinosKilled: 0,
@@ -169,8 +172,19 @@ export class GameWorld implements WorldSenses {
       settings: options.round ?? DEFAULT_ROUND,
       podium: [],
     };
-    for (let i = 0; i < (options.eggs ?? FOOD.eggCount); i++) {
-      this.eggs.push({ ...this.openGround(), alive: true, respawnIn: 0 });
+    const scrapCount = options.scraps ?? SCRAPS.count;
+    const richCount = Math.round(scrapCount * SCRAPS.dangerZoneShare);
+    for (let i = 0; i < scrapCount; i++) {
+      const scrap: ScrapSlot = {
+        x: 0,
+        z: 0,
+        size: 0,
+        rich: i < richCount,
+        alive: true,
+        respawnIn: 0,
+      };
+      this.placeScrap(scrap);
+      this.scraps.push(scrap);
     }
     for (let id = 0; id < (options.critters ?? CRITTERS.count); id++) {
       this.critters.push(this.newCritter(id));
@@ -206,6 +220,15 @@ export class GameWorld implements WorldSenses {
     return this.brains.get(id);
   }
 
+  /** Make a bot hunt one dinosaur single-mindedly for a while, biting it on sight (for tests). */
+  setBotPrey(id: number, preyId: number, seconds: number): void {
+    const brain = this.brains.get(id);
+    if (!brain) return;
+    brain.fixatedOn = preyId;
+    brain.fixatedFor = seconds;
+    brain.thinkIn = 0;
+  }
+
   /** Make a bot stand still and do nothing for a while (for tests). */
   holdBot(id: number, seconds: number): void {
     const brain = this.brains.get(id);
@@ -235,9 +258,9 @@ export class GameWorld implements WorldSenses {
     this.resolveBites(all, events);
     this.eatCarcasses(all, dt, events);
     for (const dino of this.dinos.values()) {
-      if (dino.alive && dino.carryingId === null) this.eatFood(dino, events);
+      if (dino.alive) this.eatFood(dino, events);
     }
-    this.respawnEggs(dt, events);
+    this.respawnScraps(dt, events);
     this.respawnCritters(dt, events);
     this.rotMeat(dt, events);
     this.rotCarcasses(dt, events);
@@ -330,7 +353,7 @@ export class GameWorld implements WorldSenses {
     events.push({ type: 'meteorImpact' });
   }
 
-  /** Everyone hatches again on a fresh island: new eggs and critters, no carcasses, no events. */
+  /** Everyone hatches again on a fresh island: new scraps and critters, no carcasses, no events. */
   private startRound(events: WorldEvent[]): void {
     const round = this.round;
     round.number++;
@@ -346,11 +369,11 @@ export class GameWorld implements WorldSenses {
     this.meat.clear();
     this.happenings.clear();
     this.happeningIn = WORLD_EVENTS.firstAfterSeconds;
-    this.eggs.forEach((egg, slot) => {
-      Object.assign(egg, this.openGround());
-      egg.alive = true;
-      egg.respawnIn = 0;
-      events.push({ type: 'eggSpawned', slot });
+    this.scraps.forEach((scrap, slot) => {
+      this.placeScrap(scrap);
+      scrap.alive = true;
+      scrap.respawnIn = 0;
+      events.push({ type: 'scrapSpawned', slot });
     });
     for (const critter of this.critters) {
       Object.assign(critter, this.newCritter(critter.id));
@@ -430,10 +453,11 @@ export class GameWorld implements WorldSenses {
   private safeSpawnPoint(): { x: number; z: number } {
     const others = [...this.dinos.values()].filter((dino) => dino.alive);
     const enough: number = ROUND.safeSpawnDistance;
-    let best = this.openGround();
+    // Hatchlings start outside the danger zones.
+    let best = this.safeGround();
     let bestScore = -Infinity;
     for (let attempt = 0; attempt < SPAWN_CANDIDATES; attempt++) {
-      const spot = attempt === 0 ? best : this.openGround();
+      const spot = attempt === 0 ? best : this.safeGround();
       let threatGap = enough;
       let crowdGap = enough;
       for (const other of others) {
@@ -593,6 +617,8 @@ export class GameWorld implements WorldSenses {
       food: massGained(victim.mass),
       radius: killCarcassRadius(victim.mass),
       kind: 'kill',
+      bodyMass: victim.mass,
+      variant: 0,
       lifetime: CARCASS.killLifetimeSeconds,
       happeningId: null,
     });
@@ -676,9 +702,12 @@ export class GameWorld implements WorldSenses {
   ): void {
     for (const dino of this.dinos.values()) {
       if (!dino.alive || inputs.get(dino.id)?.eat !== true) continue;
+      // A mouth full of carcass eats that; otherwise whatever lies in front of the mouth, or
+      // under the dinosaur if it has walked right onto a big one.
       const carcass =
         dino.carryingId === null
-          ? this.carcassInZone(attackZone(dino, dino.mass), () => true)
+          ? (this.carcassInZone(attackZone(dino, dino.mass), () => true) ??
+            this.carcassInZone({ x: dino.x, z: dino.z, radius: bodyRadius(dino.mass) }, () => true))
           : this.carcasses.get(dino.carryingId);
       if (!carcass) continue;
       const amount = Math.min(carcass.food, eatRate(dino.mass) * dt);
@@ -707,24 +736,29 @@ export class GameWorld implements WorldSenses {
 
   // --- Food -----------------------------------------------------------------------
 
-  /** Eggs, meat and critters are eaten on contact, worth more in the danger zones. */
+  /**
+   * Meat and critters are eaten on contact, even with a carcass in the mouth, and are worth more
+   * in the danger zones.
+   */
   private eatFood(dino: Dino, events: WorldEvent[]): void {
     const bite = biteZone(dino, dino.mass);
-    for (let slot = 0; slot < this.eggs.length; slot++) {
-      const egg = this.eggs[slot];
-      if (!egg.alive || !zoneTouches(bite, egg.x, egg.z, FOOD.eggRadius)) continue;
-      egg.alive = false;
-      egg.respawnIn = FOOD.eggRespawnSeconds;
-      this.stats.eggsEaten++;
-      events.push({ type: 'eggEaten', dinoId: dino.id, slot });
-      this.setMass(dino, dino.mass + FOOD_MASS.egg * foodMultiplierAt(egg.x, egg.z), events);
+    for (let slot = 0; slot < this.scraps.length; slot++) {
+      const scrap = this.scraps[slot];
+      if (!scrap.alive || !zoneTouches(bite, scrap.x, scrap.z, meatRadius(scrap.size))) continue;
+      scrap.alive = false;
+      scrap.respawnIn = scrap.rich ? SCRAPS.richRespawnSeconds : SCRAPS.respawnSeconds;
+      this.stats.scrapsEaten++;
+      events.push({ type: 'scrapEaten', dinoId: dino.id, slot });
+      const value = meatMass(scrap.size) * foodMultiplierAt(scrap.x, scrap.z);
+      this.setMass(dino, dino.mass + value, events);
     }
     for (const chunk of this.meat.values()) {
-      if (!zoneTouches(bite, chunk.x, chunk.z, MEAT.radius)) continue;
+      if (!zoneTouches(bite, chunk.x, chunk.z, meatRadius(chunk.size))) continue;
       this.meat.delete(chunk.id);
       this.stats.meatEaten++;
       events.push({ type: 'meatEaten', meatId: chunk.id, dinoId: dino.id });
-      this.setMass(dino, dino.mass + FOOD_MASS.meat * foodMultiplierAt(chunk.x, chunk.z), events);
+      const value = meatMass(chunk.size) * foodMultiplierAt(chunk.x, chunk.z);
+      this.setMass(dino, dino.mass + value, events);
     }
     for (const critter of this.critters) {
       if (!critter.alive || !zoneTouches(bite, critter.x, critter.z, CRITTERS.radius)) continue;
@@ -737,21 +771,66 @@ export class GameWorld implements WorldSenses {
     }
   }
 
-  private respawnEggs(dt: number, events: WorldEvent[]): void {
-    for (let slot = 0; slot < this.eggs.length; slot++) {
-      const egg = this.eggs[slot];
-      if (egg.alive) continue;
-      egg.respawnIn -= dt;
-      if (egg.respawnIn > TIMER_EPSILON) continue;
-      const spot = this.openGround();
-      egg.x = spot.x;
-      egg.z = spot.z;
-      egg.alive = true;
-      events.push({ type: 'eggSpawned', slot });
+  private respawnScraps(dt: number, events: WorldEvent[]): void {
+    for (let slot = 0; slot < this.scraps.length; slot++) {
+      const scrap = this.scraps[slot];
+      if (scrap.alive) continue;
+      scrap.respawnIn -= dt;
+      if (scrap.respawnIn > TIMER_EPSILON) continue;
+      this.placeScrap(scrap);
+      scrap.alive = true;
+      events.push({ type: 'scrapSpawned', slot });
     }
   }
 
-  private addMeat(x: number, z: number, happeningId: number | null, events: WorldEvent[]): void {
+  /**
+   * Put a scrap somewhere new, with a new size: rich slots go to the danger zones, where big
+   * pieces are common, and the rest anywhere else on open ground.
+   */
+  private placeScrap(scrap: ScrapSlot): void {
+    const spot = scrap.rich ? this.dangerGround() : this.safeGround();
+    scrap.x = spot.x;
+    scrap.z = spot.z;
+    scrap.size = this.meatSize(scrap.rich ? SCRAPS.dangerSizeWeights : SCRAPS.sizeWeights);
+  }
+
+  /** Open ground outside the danger zones. */
+  private safeGround(): { x: number; z: number } {
+    for (let attempt = 0; attempt < HAPPENING_ATTEMPTS; attempt++) {
+      const spot = this.openGround();
+      if (dangerZoneAt(spot.x, spot.z) === null) return spot;
+    }
+    return this.openGround();
+  }
+
+  /** A random meat size, by weight (MEAT_SIZES order). */
+  private meatSize(weights: readonly [number, number, number]): MeatSize {
+    let pick = this.random() * (weights[0] + weights[1] + weights[2]);
+    pick -= weights[0];
+    if (pick < 0) return 0;
+    pick -= weights[1];
+    return pick < 0 ? 1 : 2;
+  }
+
+  /** Open ground in one of the danger zones, picked at random. */
+  private dangerGround(): { x: number; z: number } {
+    const zone: DangerZoneId = this.random() < 0.5 ? 'ashlands' : 'tarPits';
+    for (let attempt = 0; attempt < HAPPENING_ATTEMPTS; attempt++) {
+      const spot = this.pointInZone(zone);
+      if (isOpenGround(this.terrain, spot.x, spot.z) && dangerZoneAt(spot.x, spot.z) === zone) {
+        return spot;
+      }
+    }
+    return this.openGround();
+  }
+
+  private addMeat(
+    x: number,
+    z: number,
+    size: MeatSize,
+    happeningId: number | null,
+    events: WorldEvent[],
+  ): void {
     if (this.meat.size >= MEAT.maxChunks) {
       const oldest = this.meat.values().next().value;
       if (oldest) {
@@ -759,7 +838,7 @@ export class GameWorld implements WorldSenses {
         events.push({ type: 'meatRotted', meatId: oldest.id });
       }
     }
-    const chunk: MeatChunk = { id: this.nextMeatId++, x, z, age: 0, happeningId };
+    const chunk: MeatChunk = { id: this.nextMeatId++, x, z, size, age: 0, happeningId };
     this.meat.set(chunk.id, chunk);
     events.push({ type: 'meatDropped', meatId: chunk.id });
   }
@@ -801,11 +880,13 @@ export class GameWorld implements WorldSenses {
         food,
         radius: settings.radius * Math.max(1, Math.cbrt(food / settings.food.max)),
         kind: 'event',
+        bodyMass: 0,
+        variant,
         lifetime: settings.lifetimeSeconds,
         happeningId: id,
       });
     } else {
-      const { chunks, scatterRadius } = WORLD_EVENTS.meatDrop;
+      const { chunks, scatterRadius, sizeWeights } = WORLD_EVENTS.meatDrop;
       const count = Math.floor(randomRange(this.random, chunks.min, chunks.max + 1));
       for (let i = 0; i < count; i++) {
         const angle = this.random() * TAU;
@@ -815,8 +896,9 @@ export class GameWorld implements WorldSenses {
           spot.z + Math.sin(angle) * reach,
         );
         if (!isOpenGround(this.terrain, x, z)) continue;
-        this.addMeat(x, z, id, events);
-        food += FOOD_MASS.meat * foodMultiplierAt(x, z);
+        const size = this.meatSize(sizeWeights);
+        this.addMeat(x, z, size, id, events);
+        food += meatMass(size) * foodMultiplierAt(x, z);
       }
     }
     const happening: Happening = { id, kind, x: spot.x, z: spot.z, zone, food, variant, age: 0 };

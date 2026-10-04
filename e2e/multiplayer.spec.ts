@@ -86,7 +86,8 @@ test.describe('multiplayer', () => {
       await endProtection(bob);
       await setMass(alice, 40);
       await expect.poll(async () => (await gameState(alice)).mass).toBeGreaterThanOrEqual(40);
-      const bobsDeath = captureFrames(bob, [{ alive: false }, { alive: true }]);
+      // The state and the event that shows the death card can land on different frames online.
+      const bobsDeath = captureFrames(bob, [{ alive: false, deathCard: true }, { alive: true }]);
       const alicesMeal = captureFrames(alice, [{ carrying: true }]);
       await clickToBite(alice);
       const [meal] = await alicesMeal;
@@ -95,6 +96,7 @@ test.describe('multiplayer', () => {
         (state) => !state.carrying && state.mass > 46.9, // the whole carcass eaten
         () => alice.keyboard.down('KeyE'),
         () => alice.keyboard.up('KeyE'),
+        45_000, // eating goes at the pace of two slow tabs' inputs
       );
       const [dead, reborn] = await bobsDeath;
 

@@ -5,7 +5,7 @@ import {
   holdUntil,
   movedLeft,
   openGame,
-  placeEggAhead,
+  placeScrapAhead,
   setMass,
   turned,
   watchForErrors,
@@ -50,9 +50,9 @@ test.describe('desktop', () => {
     expect(movedLeft(start, end)).toBeGreaterThan(0.2); // veered left, towards the cursor
   });
 
-  test('eating an egg grows the dinosaur', async ({ page }) => {
+  test('eating a scrap grows the dinosaur', async ({ page }) => {
     await openGame(page);
-    await placeEggAhead(page, 2.5);
+    await placeScrapAhead(page, 2.5);
 
     await holdUntil(
       page,

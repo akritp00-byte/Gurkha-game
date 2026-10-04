@@ -5,7 +5,7 @@ import { type PlayerInput, stepLocomotion } from '../movement.ts';
 import { createRandom, type Random } from '../random.ts';
 import { FERN_PATCHES } from '../world/layout.ts';
 import { type BotBrain, botInput, createBotBrain } from './bots.ts';
-import type { Carcass, Dino, EggSlot, WorldSenses } from './entities.ts';
+import type { Carcass, Dino, ScrapSlot, WorldSenses } from './entities.ts';
 
 const TICK = 1 / 20;
 /** A random source that always says 0.5: no distractions, no wobble, average everything. */
@@ -41,10 +41,10 @@ function dino(id: number, x: number, z: number, mass = 10, heading = 0): Dino {
   };
 }
 
-function senses(dinos: Dino[], eggs: EggSlot[] = [], carcasses: Carcass[] = []): WorldSenses {
+function senses(dinos: Dino[], scraps: ScrapSlot[] = [], carcasses: Carcass[] = []): WorldSenses {
   return {
     dinos: new Map(dinos.map((d) => [d.id, d])),
-    eggs,
+    scraps,
     meat: new Map(),
     critters: [],
     carcasses: new Map(carcasses.map((c) => [c.id, c])),
@@ -61,6 +61,8 @@ function carcass(id: number, x: number, z: number, food: number, kind: Carcass['
     size: food,
     radius: 2.4,
     kind,
+    bodyMass: kind === 'kill' ? food / 0.7 : 0,
+    variant: 0,
     carrierId: null,
     age: 0,
     lifetime: 120,
@@ -97,23 +99,25 @@ describe('bots', () => {
     expect(brain.mode).toBe('flee');
     drive(brain, self, senses([self, threat]), 2.4);
 
-    expect(Math.hypot(self.x - threat.x, self.z - threat.z)).toBeGreaterThan(6 + 15);
+    expect(Math.hypot(self.x - threat.x, self.z - threat.z)).toBeGreaterThan(6 + 12);
   });
 
-  it('hunt smaller dinosaurs and bite ones in reach', () => {
+  it('hunt smaller dinosaurs and bite ones in reach, though not straight away', () => {
     const self = dino(1, 60, 0, 50);
-    const prey = dino(2, 66, 10);
-    const brain = createBotBrain(steady, 0.9);
+    const prey = dino(2, 61, 5);
+    const brain = createBotBrain(steady, BOTS.skill.max);
     let bitInReach = false;
 
+    let sprinted = false;
     drive(
       brain,
       self,
       senses([self, prey]),
-      4,
+      12,
       () => bitInReach,
-      steady,
+      createRandom(5),
       (input) => {
+        sprinted ||= input.sprint;
         const inReach = zoneTouches(
           attackZone(self, self.mass),
           prey.x,
@@ -126,6 +130,38 @@ describe('bots', () => {
 
     expect(bitInReach).toBe(true);
     expect(brain.mode).toBe('hunt');
+    expect(sprinted).toBe(false); // bots amble after prey: a player can always outrun them
+  });
+
+  it('stop hunting once they are big, and leave smaller dinosaurs alone', () => {
+    const self = dino(1, 60, 0, BOTS.maxHuntingMass + 50);
+    const prey = dino(2, 63, 6, 40);
+    const brain = createBotBrain(createRandom(2), 0.6);
+    let bit = false;
+    drive(
+      brain,
+      self,
+      senses([self, prey]),
+      6,
+      () => bit,
+      createRandom(9),
+      (input) => {
+        bit ||= input.bite;
+      },
+    );
+    expect(bit).toBe(false);
+    expect(brain.mode).not.toBe('hunt');
+  });
+
+  it('shy away from the rich food in the danger zones', () => {
+    const self = dino(1, 0, 40);
+    // A haunch on the volcano's slopes, and a plain scrap just as far away on the plains.
+    const rich: ScrapSlot = { x: 0, z: 30, size: 2, rich: true, alive: true, respawnIn: 0 };
+    const plain: ScrapSlot = { x: 0, z: 50, size: 1, rich: false, alive: true, respawnIn: 0 };
+    const brain = createBotBrain(steady, 0.5);
+    drive(brain, self, senses([self], [rich, plain]), 1);
+    expect(brain.mode).toBe('food');
+    expect(brain.goalZ).toBeGreaterThan(40);
   });
 
   it('stop and eat the carcass in their mouth', () => {
@@ -148,13 +184,13 @@ describe('bots', () => {
   it('head for a world-event carcass they hear about, and eat once they reach it', () => {
     const self = dino(1, 60, 0, 30);
     const feast = carcass(3, 60, 70, 200, 'event');
-    const egg = { x: 64, z: -4, alive: true, respawnIn: 0 };
+    const scrap = { x: 64, z: -4, size: 0, rich: false, alive: true, respawnIn: 0 } as const;
     const brain = createBotBrain(steady, 0.6);
     let eating = false;
     drive(
       brain,
       self,
-      senses([self], [egg], [feast]),
+      senses([self], [scrap], [feast]),
       15,
       () => eating,
       steady,
@@ -214,11 +250,11 @@ describe('bots', () => {
 
   it('go for food when nothing is threatening or edible', () => {
     const self = dino(1, 60, 0);
-    const egg = { x: 66, z: -6, alive: true, respawnIn: 0 };
+    const scrap = { x: 66, z: -6, size: 0, rich: false, alive: true, respawnIn: 0 } as const;
     const brain = createBotBrain(steady, 0.5);
 
-    const reached = drive(brain, self, senses([self], [egg]), 4, () =>
-      biteTouches(self, self.mass, egg.x, egg.z, 0.25),
+    const reached = drive(brain, self, senses([self], [scrap]), 4, () =>
+      biteTouches(self, self.mass, scrap.x, scrap.z, 0.25),
     );
 
     expect(reached).toBe(true);
@@ -250,8 +286,8 @@ describe('bots', () => {
     }
     const mean = (list: BotBrain[]) =>
       list.reduce((sum, b) => sum + b.reactionSeconds, 0) / list.length;
-    expect(mean(brains.filter((b) => b.skill > 0.7))).toBeLessThan(
-      mean(brains.filter((b) => b.skill < 0.35)),
+    expect(mean(brains.filter((b) => b.skill > 0.45))).toBeLessThan(
+      mean(brains.filter((b) => b.skill < 0.2)),
     );
 
     // A threat that appears just after a decision isn't noticed until the next one.
@@ -293,7 +329,7 @@ describe('bots', () => {
     const sharp = maxWobble(BOTS.skill.max);
     expect(sharp).toBeGreaterThan(0);
     expect(clumsy).toBeGreaterThan(0.1);
-    expect(clumsy).toBeGreaterThan(sharp * 3);
+    expect(clumsy).toBeGreaterThan(sharp * 1.5);
     expect(clumsy).toBeLessThanOrEqual(BOTS.maxSteeringWobble);
   });
 

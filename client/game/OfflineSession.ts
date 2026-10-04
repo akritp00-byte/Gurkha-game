@@ -86,8 +86,8 @@ export class OfflineSession implements Session {
     return this.world.dinos;
   }
 
-  get eggs() {
-    return this.world.eggs;
+  get scraps() {
+    return this.world.scraps;
   }
 
   get meat() {
@@ -166,11 +166,14 @@ export class OfflineSession implements Session {
   private translate(events: readonly WorldEvent[], out: SessionEvent[]): void {
     for (const event of events) {
       switch (event.type) {
-        case 'eggEaten':
-          out.push({ type: 'eggEaten', slot: event.slot }, { type: 'bite', dinoId: event.dinoId });
+        case 'scrapEaten':
+          out.push(
+            { type: 'scrapEaten', slot: event.slot },
+            { type: 'bite', dinoId: event.dinoId },
+          );
           break;
-        case 'eggSpawned':
-          out.push({ type: 'eggSpawned', slot: event.slot });
+        case 'scrapSpawned':
+          out.push({ type: 'scrapSpawned', slot: event.slot });
           break;
         case 'bite':
         case 'meatEaten':
@@ -255,15 +258,17 @@ export class OfflineSession implements Session {
         world.startHappening(kind, events, at && { x: at[0], z: at[1] });
         this.translate(events, this.pending);
       },
-      placeEggAhead: (distance) => {
-        const slot = world.eggs.findIndex((egg) => egg.alive);
+      placeScrapAhead: (distance) => {
+        // A plain scrap (the smallest size), so tests know what it's worth.
+        const slot = world.scraps.findIndex((scrap) => scrap.alive && !scrap.rich);
         if (slot < 0) return;
-        const egg = world.eggs[slot];
-        egg.x = player.x + Math.sin(player.heading) * distance;
-        egg.z = player.z + Math.cos(player.heading) * distance;
-        this.pending.push({ type: 'eggSpawned', slot });
+        const scrap = world.scraps[slot];
+        scrap.size = 0;
+        scrap.x = player.x + Math.sin(player.heading) * distance;
+        scrap.z = player.z + Math.cos(player.heading) * distance;
+        this.pending.push({ type: 'scrapSpawned', slot });
       },
-      placeDinoAhead: (mass, distance, facing, side = 0, still = false) => {
+      placeDinoAhead: (mass, distance, facing, side = 0, behaviour = 'roam') => {
         let bot: Dino | undefined;
         let furthest = -1;
         for (const dino of world.dinos.values()) {
@@ -288,7 +293,8 @@ export class OfflineSession implements Session {
         bot.pushX = 0;
         bot.pushZ = 0;
         bot.protectedFor = 0;
-        world.holdBot(bot.id, still ? STILL_SECONDS : 0);
+        world.holdBot(bot.id, behaviour === 'still' ? STILL_SECONDS : 0);
+        world.setBotPrey(bot.id, player.id, behaviour === 'hunt' ? STILL_SECONDS : 0);
         this.dinoHistory.forget(bot.id);
         this.pending.push({ type: 'dinoSpawned', dinoId: bot.id });
         return bot.id;

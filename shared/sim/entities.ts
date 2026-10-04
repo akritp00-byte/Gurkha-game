@@ -30,12 +30,21 @@ export interface Dino extends Locomotion {
   rank: number;
 }
 
-/** One egg's slot. An eaten egg waits out a timer, then reappears somewhere else. */
-export interface EggSlot {
+/** Meat comes in three sizes: an index into MEAT_SIZES (a scrap, a cut or a haunch). */
+export type MeatSize = 0 | 1 | 2;
+
+/**
+ * One scrap of meat's slot. An eaten scrap waits out a timer, then reappears somewhere else,
+ * maybe bigger or smaller. Rich slots always reappear in a danger zone.
+ */
+export interface ScrapSlot {
   x: number;
   z: number;
+  size: MeatSize;
+  /** This slot belongs to the danger zones. */
+  readonly rich: boolean;
   alive: boolean;
-  /** Seconds until an eaten egg reappears. */
+  /** Seconds until an eaten scrap reappears. */
   respawnIn: number;
 }
 
@@ -44,6 +53,7 @@ export interface MeatChunk {
   readonly id: number;
   readonly x: number;
   readonly z: number;
+  readonly size: MeatSize;
   /** Seconds since it landed; it rots away at MEAT.lifetimeSeconds. */
   age: number;
   /** The world event that scattered it. */
@@ -85,6 +95,10 @@ export interface Carcass {
   /** Bites and mouths reach it within this radius of its middle. */
   readonly radius: number;
   readonly kind: 'kill' | 'event';
+  /** A kill is drawn as the victim's body: its mass when it died. 0 for an event carcass. */
+  readonly bodyMass: number;
+  /** An event carcass's species (an index into CARCASS_SPECIES). 0 for a kill. */
+  readonly variant: number;
   carrierId: number | null;
   /** Seconds it has lain on the ground. It rots at `lifetime`. */
   age: number;
@@ -124,8 +138,8 @@ export interface RoundState {
 export type BiteOutcome = 'kill' | 'grab' | 'drop' | 'shove' | 'miss';
 
 export type WorldEvent =
-  | { readonly type: 'eggEaten'; readonly dinoId: number; readonly slot: number }
-  | { readonly type: 'eggSpawned'; readonly slot: number }
+  | { readonly type: 'scrapEaten'; readonly dinoId: number; readonly slot: number }
+  | { readonly type: 'scrapSpawned'; readonly slot: number }
   | { readonly type: 'meatDropped'; readonly meatId: number }
   | { readonly type: 'meatEaten'; readonly meatId: number; readonly dinoId: number }
   | { readonly type: 'meatRotted'; readonly meatId: number }
@@ -159,7 +173,7 @@ export type WorldEvent =
 /** Everything a bot can look at when deciding what to do. GameWorld provides this. */
 export interface WorldSenses {
   readonly dinos: ReadonlyMap<number, Dino>;
-  readonly eggs: readonly EggSlot[];
+  readonly scraps: readonly ScrapSlot[];
   readonly meat: ReadonlyMap<number, MeatChunk>;
   readonly critters: readonly Critter[];
   readonly carcasses: ReadonlyMap<number, Carcass>;

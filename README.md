@@ -13,8 +13,8 @@ The brief, game rules and milestone plan are in [BUILD_PROMPT.md](BUILD_PROMPT.m
 | M2 Core rules offline         | Done    |
 | M3 Multiplayer                | Done    |
 | M4 Round loop                 | Done    |
-| M5 Art pass                   | Next    |
-| M6 Abilities, audio and juice | Planned |
+| M5 Art pass                   | Done    |
+| M6 Abilities, audio and juice | Next    |
 | M7 Interface polish           | Planned |
 | M8 Deployment                 | Planned |
 
@@ -30,14 +30,16 @@ pnpm dev               # client and game server together
 
 Open http://localhost:5173 and you join a game on the local server as a tiny Compsognathus. Bots keep every room at 16 dinosaurs and make way as players join. Open a second tab, or a phone on the same Wi-Fi (see below), to play against yourself. If the server can't be reached, the game tells you and you play offline against bots instead.
 
-- Eat eggs (+1), meat (+2) and critters (+4) just by running into them.
+- Eat meat lying about just by running into it: scraps (+1), cuts (+3) and haunches (+8). Critters (+4) run away, but tire quickly.
 - Bite (left click) any dinosaur with a green ring: its carcass ends up in your mouth, worth 70% of its mass. Hold E to eat it. Bite a dinosaur your own size and you shove it, knocking its food loose.
 - Run from red rings: they can bite you.
 - Watch for world events: huge carcasses and meat drops, announced at the top of the screen and marked on the minimap. Everyone goes for them.
-- Danger zones (the volcano's slopes and the ground round the tar pits, red on the minimap) make all food worth 3–4× more, with bigger events, and the eggs there are golden.
+- Danger zones (the volcano's slopes and the ground round the tar pits, red on the minimap) are piled with meat worth 4–5× more, glowing gold, mostly big cuts and haunches: a haunch on the volcano is worth 40 scraps. Events there are bigger too. The bots mostly stay away.
+- Bigger dinosaurs are a little faster, so a lead keeps growing. Small ones turn tighter and can hide.
 - Small dinosaurs can hide in ferns. At 40 mass you evolve into a Velociraptor.
 - If you're caught, you hatch again 3 seconds later.
-- Each round lasts 5 minutes. At 4:00 the meteor appears, and whoever is biggest when it hits wins. Then everyone starts again.
+- Each round lasts 20 minutes. For the last two the meteor is coming, and whoever is biggest when it hits wins. Then everyone starts again.
+- M turns the sound off and on.
 
 | Device  | Controls                                                                                                                                                  |
 | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,7 +63,7 @@ URL options for trying things out:
 
 Online, `?seed=`, `?bots=` and `?round=` only work against the test server that `pnpm dev` runs (they're ignored by `pnpm start`), and only for the player who creates the room.
 
-While `pnpm dev` runs, http://localhost:5173/dev/dinos.html shows every tier's placeholder dinosaur side by side.
+While `pnpm dev` runs, http://localhost:5173/dev/dinos.html shows every tier's dinosaur side by side (`?pose=run|bite|roar|dead|carry` tries the animations).
 
 To change ports or point the client at another server, copy `.env.example` to `.env` and edit it.
 
@@ -98,8 +100,10 @@ client/          Three.js + Vite browser client
   game/          the game loop, drawing a session: offline (the shared simulation
                  in the browser) or online
   input/         keyboard, mouse and touch steering, and sprint
-  render/        terrain, sky, plants, eggs, meat, critters, carcasses, vents, threat
-                 rings, event beacons, the meteor, dinosaurs (dino/) and the camera
+  render/        terrain, water, sky and clouds, plants and props, meat, critters,
+                 carcasses, vents, threat rings, event beacons, the meteor, particles,
+                 pterosaurs, bloom, dinosaurs (dino/) and the camera
+  audio/         synthesised sound effects and ambience (Web Audio)
   net/           the online session: joining, prediction and interpolation
   ui/            HUD, round clock, leaderboard, minimap, podium, banners, kill feed,
                  death card, name tags, debug overlay, hints and styles
@@ -119,7 +123,7 @@ shared/          rules and constants used by both sides
 e2e/             Playwright browser tests
 ```
 
-Asset (`client/assets/`) and audio (`client/audio/`) folders arrive with milestones 5 and 6.
+Everything you see and hear is made in code: low-poly models built at load time and sounds synthesised in the browser, so there are no art or audio files to download or license.
 
 ## Docs
 

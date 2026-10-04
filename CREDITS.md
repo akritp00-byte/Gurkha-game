@@ -4,9 +4,9 @@ Every third-party asset (models, textures, sounds, music, fonts) is listed here 
 
 ## Art and audio
 
-| Asset       | Used for                                  | Author / source | Licence |
-| ----------- | ----------------------------------------- | --------------- | ------- |
-| _None yet._ | All visuals so far are generated in code. |                 |         |
+| Asset   | Used for                                                                                                                                            | Author / source | Licence |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------- |
+| _None._ | Every model, plant, particle and sound is generated in code: the models at load time, the sounds synthesised in the browser with the Web Audio API. |                 |         |
 
 ## Open-source libraries
 

@@ -55,18 +55,18 @@ function at(x: number, z: number, heading = 0): Motion {
 }
 
 describe('speed curve', () => {
-  it('is 9 × (10 / mass) ^ 0.18, never below 4.5', () => {
+  it('is 9 × (mass / 10) ^ 0.06, never above 13', () => {
     expect(speedForMass(10)).toBeCloseTo(9);
-    expect(speedForMass(40)).toBeCloseTo(9 * 0.25 ** 0.18);
-    expect(speedForMass(150)).toBeCloseTo(9 * (10 / 150) ** 0.18);
-    expect(speedForMass(500)).toBe(4.5);
-    expect(speedForMass(1500)).toBe(4.5);
+    expect(speedForMass(40)).toBeCloseTo(9 * 4 ** 0.06);
+    expect(speedForMass(1500)).toBeCloseTo(9 * 150 ** 0.06);
+    expect(speedForMass(1e9)).toBe(MOVEMENT.maxSpeed);
   });
 
-  it('never gets faster as mass grows', () => {
+  it('never gets slower as mass grows, so a lead keeps growing', () => {
     for (let mass = 10; mass < 3000; mass += 7) {
-      expect(speedForMass(mass + 7)).toBeLessThanOrEqual(speedForMass(mass));
+      expect(speedForMass(mass + 7)).toBeGreaterThanOrEqual(speedForMass(mass));
     }
+    expect(speedForMass(1500)).toBeGreaterThan(speedForMass(10) * 1.3);
   });
 });
 

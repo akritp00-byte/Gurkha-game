@@ -1,6 +1,6 @@
 import { clamp } from './math.ts';
 import type { PlayerInput } from './movement.ts';
-import type { HappeningKind } from './sim/entities.ts';
+import type { HappeningKind, MeatSize } from './sim/entities.ts';
 import type { DangerZoneId } from './world/layout.ts';
 
 /**
@@ -85,6 +85,11 @@ export function zoneCode(zone: DangerZoneId | null): number {
 
 export function zoneFromCode(code: number): DangerZoneId | null {
   return ZONE_CODES[code] ?? null;
+}
+
+/** A meat size sent as a number, kept to the sizes there are. */
+export function meatSizeOf(code: number): MeatSize {
+  return code >= 2 ? 2 : code >= 1 ? 1 : 0;
 }
 
 /** Events the server sends a client after a tick: only those it should hear about. */
@@ -190,15 +195,19 @@ export interface NetDino {
   readonly eating: boolean;
 }
 
-export interface NetEgg {
+export interface NetScrap {
   readonly x: number;
   readonly z: number;
+  /** An index into MEAT_SIZES. */
+  readonly size: number;
   readonly alive: boolean;
 }
 
 export interface NetMeat {
   readonly x: number;
   readonly z: number;
+  /** An index into MEAT_SIZES. */
+  readonly size: number;
   /** The tick it was dropped on. */
   readonly born: number;
 }
@@ -221,6 +230,10 @@ export interface NetCarcass {
   readonly size: number;
   readonly radius: number;
   readonly kind: number;
+  /** A kill's victim mass, so it's drawn as that body; 0 for an event carcass. */
+  readonly bodyMass: number;
+  /** An event carcass's species (an index into CARCASS_SPECIES). */
+  readonly variant: number;
   /** Id of the dinosaur carrying it, 0 if it's on the ground. */
   readonly carrier: number;
 }

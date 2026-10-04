@@ -31,7 +31,7 @@ import {
   CarcassState,
   CritterState,
   DinoState,
-  EggState,
+  ScrapState,
   GameState,
   HappeningState,
   InputState,
@@ -48,7 +48,7 @@ interface Player {
   /** The entities currently in this player's view. */
   readonly seen: {
     readonly dinos: Set<DinoState>;
-    readonly eggs: Set<EggState>;
+    readonly scraps: Set<ScrapState>;
     readonly meat: Set<MeatState>;
     readonly critters: Set<CritterState>;
     readonly carcasses: Set<CarcassState>;
@@ -130,8 +130,11 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     });
     this.state = new GameState();
     GameRoom.live.add(this);
-    this.world.eggs.forEach((egg, slot) => {
-      this.state.eggs.set(String(slot), new EggState({ x: egg.x, z: egg.z, alive: egg.alive }));
+    this.world.scraps.forEach((scrap, slot) => {
+      this.state.scraps.set(
+        String(slot),
+        new ScrapState({ x: scrap.x, z: scrap.z, size: scrap.size, alive: scrap.alive }),
+      );
     });
     for (const critter of this.world.critters) {
       this.state.critters.set(String(critter.id), new CritterState());
@@ -167,7 +170,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       view: new StateView(),
       seen: {
         dinos: new Set(),
-        eggs: new Set(),
+        scraps: new Set(),
         meat: new Set(),
         critters: new Set(),
         carcasses: new Set(),
@@ -240,7 +243,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     }
 
     this.syncDinos();
-    this.syncEggs();
+    this.syncScraps();
     this.syncMeat();
     this.syncCritters();
     this.syncCarcasses();
@@ -318,13 +321,14 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     state.eating = dino.eating;
   }
 
-  private syncEggs(): void {
-    this.world.eggs.forEach((egg, slot) => {
-      const state = this.state.eggs.get(String(slot));
+  private syncScraps(): void {
+    this.world.scraps.forEach((scrap, slot) => {
+      const state = this.state.scraps.get(String(slot));
       if (!state) return;
-      state.x = f32(egg.x);
-      state.z = f32(egg.z);
-      state.alive = egg.alive;
+      state.x = f32(scrap.x);
+      state.z = f32(scrap.z);
+      state.size = scrap.size;
+      state.alive = scrap.alive;
     });
   }
 
@@ -338,7 +342,12 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     for (const chunk of this.world.meat.values()) {
       if (this.meatStates.has(chunk.id)) continue;
       const born = this.ticks - Math.round(chunk.age * NETWORK.tickRate);
-      const state = new MeatState({ x: f32(chunk.x), z: f32(chunk.z), born: Math.max(born, 0) });
+      const state = new MeatState({
+        x: f32(chunk.x),
+        z: f32(chunk.z),
+        size: chunk.size,
+        born: Math.max(born, 0),
+      });
       this.meatStates.set(chunk.id, state);
       this.state.meat.set(String(chunk.id), state);
     }
@@ -370,6 +379,8 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
           kind: CARCASS_KIND_CODES.indexOf(carcass.kind),
           size: f32(carcass.size),
           radius: f32(carcass.radius),
+          bodyMass: f32(carcass.bodyMass),
+          variant: carcass.variant,
         });
         this.carcassStates.set(carcass.id, state);
         this.state.carcasses.set(String(carcass.id), state);
@@ -448,7 +459,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
   /**
    * Show a player what's near its dinosaur and hide the rest (BUILD_PROMPT.md §5). Dinosaurs
    * hidden in ferns stay out of the view entirely, so no client can reveal them, and so does a
-   * carcass in a hidden dinosaur's mouth. Eggs and meat hardly move, so they're only re-checked
+   * carcass in a hidden dinosaur's mouth. Scraps and meat hardly move, so they're only re-checked
    * when `includeSlow` is set.
    */
   private refreshView(player: Player, includeSlow: boolean): void {
@@ -487,11 +498,11 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       this.setVisible(player.view, player.seen.critters, state, near(critter.x, critter.z, seen));
     });
     if (!includeSlow) return;
-    this.world.eggs.forEach((egg, slot) => {
-      const state = this.state.eggs.get(String(slot));
+    this.world.scraps.forEach((scrap, slot) => {
+      const state = this.state.scraps.get(String(slot));
       if (!state) return;
-      const seen = player.seen.eggs.has(state);
-      this.setVisible(player.view, player.seen.eggs, state, near(egg.x, egg.z, seen));
+      const seen = player.seen.scraps.has(state);
+      this.setVisible(player.view, player.seen.scraps, state, near(scrap.x, scrap.z, seen));
     });
     for (const [id, state] of this.meatStates) {
       const chunk = this.world.meat.get(id);
@@ -529,7 +540,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       for (const event of events) {
         switch (event.type) {
           case 'bite':
-          case 'eggEaten':
+          case 'scrapEaten':
           case 'meatEaten':
           case 'critterEaten':
             if (this.sees(player, event.dinoId)) own.push({ type: 'bite', dinoId: event.dinoId });

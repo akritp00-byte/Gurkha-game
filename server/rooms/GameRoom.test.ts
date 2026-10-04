@@ -7,6 +7,7 @@ import {
   NETWORK,
   type PlayerInput,
   ROOM,
+  roundOfLength,
 } from '@extinct/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sleep, startServer, TestClient, type TestServer, waitFor } from '../testing/harness.ts';
@@ -101,10 +102,10 @@ describe('game room', () => {
     );
     await sleep(2 * (1000 / NETWORK.tickRate) * NETWORK.slowViewRefreshTicks);
     const reach = NETWORK.interestRadius + NETWORK.interestHysteresis;
-    a.room.state.eggs.forEach((egg) => {
-      expect(Math.hypot(egg.x - 70, egg.z)).toBeLessThanOrEqual(reach);
+    a.room.state.scraps.forEach((scrap) => {
+      expect(Math.hypot(scrap.x - 70, scrap.z)).toBeLessThanOrEqual(reach);
     });
-    expect(a.room.state.eggs.size).toBeGreaterThan(0);
+    expect(a.room.state.scraps.size).toBeGreaterThan(0);
 
     b.command({ cmd: 'teleport', x: 70, z: 30 });
     await waitFor(() => a.visibleNames().includes('B'), 3000, 'B coming into view');
@@ -224,7 +225,10 @@ describe('game room', () => {
   it('plays a whole round: meteor, podium with the biggest first, then a fresh round', async () => {
     const big = await player({ room: 'round', bots: 2, roundSeconds: 6, name: 'Big' });
     expect(big.room.state.round.durationSeconds).toBe(6);
-    expect(big.room.state.round.meteorWarningAtSeconds).toBeCloseTo(4.8, 5);
+    expect(big.room.state.round.meteorWarningAtSeconds).toBeCloseTo(
+      roundOfLength(6).meteorWarningAtSeconds,
+      5,
+    );
     big.command({ cmd: 'setMass', mass: 900 });
     const leader = () => big.room.state.leaderboard.at(0) as StandingState | undefined;
     await waitFor(() => leader()?.name === 'Big', 2000, 'leaderboard');
@@ -234,7 +238,9 @@ describe('game room', () => {
     await waitFor(() => big.events.some((e) => e.type === 'meteorWarning'), 7000, 'warning');
     await waitFor(() => big.room.state.round.podium.length > 0, 4000, 'impact');
     expect(big.events).toContainEqual({ type: 'meteorImpact' });
-    expect(big.room.state.round.podium[0]).toMatchObject({ name: 'Big', mass: 900, bot: false });
+    // Big may have gulped some meat lying about since, but nobody comes close.
+    expect(big.room.state.round.podium[0]).toMatchObject({ name: 'Big', bot: false });
+    expect(big.room.state.round.podium[0].mass).toBeGreaterThanOrEqual(900);
     expect(big.room.state.round.podium).toHaveLength(3);
 
     await waitFor(() => big.room.state.round.number === 2, 15_000, 'the next round');

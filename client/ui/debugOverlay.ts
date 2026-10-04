@@ -9,7 +9,7 @@ export interface DebugStats {
   readonly pingMs: number | null;
   readonly entities: {
     readonly dinos: number;
-    readonly eggs: number;
+    readonly scraps: number;
     readonly meat: number;
     readonly critters: number;
   };
@@ -78,7 +78,7 @@ export class DebugOverlay {
       `FPS ${Math.round(stats.fps)} (${stats.frameMs.toFixed(1)} ms, CPU ${stats.cpuMs.toFixed(1)} ms)`,
       `Draw calls ${stats.drawCalls} · ${(stats.triangles / 1000).toFixed(1)}k triangles`,
       `Ping ${stats.pingMs === null ? '— (offline sandbox)' : `${Math.round(stats.pingMs)} ms`}`,
-      `Entities ${stats.entities.dinos} dinos · ${stats.entities.eggs} eggs · ${stats.entities.meat} meat · ${stats.entities.critters} critters`,
+      `Entities ${stats.entities.dinos} dinos · ${stats.entities.scraps} scraps · ${stats.entities.meat} meat · ${stats.entities.critters} critters`,
       `${player.species} · mass ${player.mass.toFixed(1)} · speed ${player.speed.toFixed(1)}`,
       `Position ${player.x.toFixed(1)}, ${player.z.toFixed(1)}`,
       `Quality ${stats.quality} · controls ${stats.controls}`,

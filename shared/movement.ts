@@ -90,11 +90,14 @@ export interface Locomotion {
 /** Pushes slower than this stop instead of fading forever. */
 const PUSH_REST_SPEED = 0.05;
 
-/** Top speed for a mass: 9 × (10 / mass) ^ 0.18, never below 4.5 (BUILD_PROMPT.md §3). */
+/**
+ * Top speed for a mass: 9 × (mass / 10) ^ 0.06, never above 13. Bigger dinosaurs are a little
+ * faster, so growing pays off (the brief had them slower; see MOVEMENT).
+ */
 export function speedForMass(mass: number): number {
-  return Math.max(
-    MOVEMENT.minSpeed,
-    MOVEMENT.baseSpeed * (MOVEMENT.referenceMass / mass) ** MOVEMENT.speedExponent,
+  return Math.min(
+    MOVEMENT.maxSpeed,
+    MOVEMENT.baseSpeed * (mass / MOVEMENT.referenceMass) ** MOVEMENT.speedExponent,
   );
 }
 

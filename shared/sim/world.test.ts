@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CRITTERS,
   DANGER_ZONES,
-  FOOD,
   FOOD_MASS,
   MASS,
   MEAT,
+  MEAT_SIZES,
   ROUND,
+  SCRAPS,
   STAMINA,
   VENTS,
   WORLD,
@@ -18,7 +19,7 @@ import { createRandom } from '../random.ts';
 import { scaleForMass } from '../tiers.ts';
 import { TAR_PITS, VOLCANO, VOLCANO_VENTS } from '../world/layout.ts';
 import { dangerZoneAt, foodMultiplierAt, isOpenGround } from '../world/terrain.ts';
-import type { Dino, WorldEvent } from './entities.ts';
+import type { Dino, MeatSize, WorldEvent } from './entities.ts';
 import { roundOfLength } from './round.ts';
 import { GameWorld, type GameWorldOptions } from './world.ts';
 
@@ -28,7 +29,7 @@ const SPRINT_RUN: PlayerInput = { ...IDLE_INPUT, throttle: 1, sprint: true };
 
 /** A world with nothing in it but what the test adds: no food, no critters, no world events. */
 function emptyWorld(options: Partial<GameWorldOptions> = {}): GameWorld {
-  return new GameWorld({ seed: 1, eggs: 0, critters: 0, happenings: false, ...options });
+  return new GameWorld({ seed: 1, scraps: 0, critters: 0, happenings: false, ...options });
 }
 
 /** Stand a dinosaur still at (x, z), facing `heading`, with its spawn protection over. */
@@ -44,8 +45,8 @@ function mouth(dino: Dino): { x: number; z: number } {
   return biteCenter(dino, scaleForMass(dino.mass));
 }
 
-function addEgg(world: GameWorld, at: { x: number; z: number }): void {
-  world.eggs.push({ x: at.x, z: at.z, alive: true, respawnIn: 0 });
+function addScrap(world: GameWorld, at: { x: number; z: number }, size: MeatSize = 0): void {
+  world.scraps.push({ x: at.x, z: at.z, size, rich: false, alive: true, respawnIn: 0 });
 }
 
 /** Step until `done` returns true for an event (or the time runs out); returns the events seen. */
@@ -69,12 +70,13 @@ function run(world: GameWorld, seconds: number, inputs = NO_INPUT): WorldEvent[]
 }
 
 describe('GameWorld setup', () => {
-  it('places every egg, critter and dinosaur on open ground', () => {
+  it('places every scrap, critter and dinosaur on open ground', () => {
     const world = new GameWorld({ seed: 3 });
     const dino = world.addPlayer('Tester');
-    expect(world.eggs).toHaveLength(FOOD.eggCount);
+    expect(world.scraps).toHaveLength(SCRAPS.count);
     expect(world.critters).toHaveLength(CRITTERS.count);
-    for (const egg of world.eggs) expect(isOpenGround(world.terrain, egg.x, egg.z)).toBe(true);
+    for (const scrap of world.scraps)
+      expect(isOpenGround(world.terrain, scrap.x, scrap.z)).toBe(true);
     for (const c of world.critters) expect(isOpenGround(world.terrain, c.x, c.z)).toBe(true);
     expect(isOpenGround(world.terrain, dino.x, dino.z)).toBe(true);
     expect(dino.mass).toBe(MASS.start);
@@ -91,38 +93,38 @@ describe('GameWorld setup', () => {
   });
 });
 
-describe('eggs', () => {
+describe('scraps of meat', () => {
   it('are eaten when they touch the bite zone, and add 1 mass', () => {
     const world = emptyWorld();
     const dino = world.addPlayer('Tester');
     place(dino, 60, 0);
-    addEgg(world, mouth(dino));
+    addScrap(world, mouth(dino));
 
     const events = world.step(TICK, NO_INPUT);
 
-    expect(events).toContainEqual({ type: 'eggEaten', dinoId: dino.id, slot: 0 });
-    expect(dino.mass).toBe(MASS.start + FOOD_MASS.egg);
-    expect(world.eggs[0].alive).toBe(false);
-    expect(world.stats.eggsEaten).toBe(1);
+    expect(events).toContainEqual({ type: 'scrapEaten', dinoId: dino.id, slot: 0 });
+    expect(dino.mass).toBe(MASS.start + MEAT_SIZES[0].mass);
+    expect(world.scraps[0].alive).toBe(false);
+    expect(world.stats.scrapsEaten).toBe(1);
   });
 
   it('come back somewhere else after the respawn delay', () => {
     const world = emptyWorld();
     const dino = world.addPlayer('Tester');
     place(dino, 60, 0);
-    addEgg(world, mouth(dino));
+    addScrap(world, mouth(dino));
     world.step(TICK, NO_INPUT);
-    place(dino, 100, -20); // walk away so the respawned egg isn't eaten straight away
+    place(dino, 100, -20); // walk away so the respawned scrap isn't eaten straight away
 
     const events = stepUntil(
       world,
-      FOOD.eggRespawnSeconds + 0.5,
-      (e) => e.type === 'eggSpawned' && e.slot === 0,
+      SCRAPS.respawnSeconds + 0.5,
+      (e) => e.type === 'scrapSpawned' && e.slot === 0,
     );
 
-    expect(events).toContainEqual({ type: 'eggSpawned', slot: 0 });
-    expect(world.eggs[0].alive).toBe(true);
-    expect(isOpenGround(world.terrain, world.eggs[0].x, world.eggs[0].z)).toBe(true);
+    expect(events).toContainEqual({ type: 'scrapSpawned', slot: 0 });
+    expect(world.scraps[0].alive).toBe(true);
+    expect(isOpenGround(world.terrain, world.scraps[0].x, world.scraps[0].z)).toBe(true);
   });
 
   it('can tip a dinosaur into the next tier', () => {
@@ -130,7 +132,7 @@ describe('eggs', () => {
     const dino = world.addPlayer('Tester');
     place(dino, 60, 0);
     world.setMass(dino, 39);
-    addEgg(world, mouth(dino));
+    addScrap(world, mouth(dino));
 
     expect(world.step(TICK, NO_INPUT)).toContainEqual({
       type: 'tierChanged',
@@ -177,7 +179,7 @@ describe('meat', () => {
     return [...world.meat.values()].filter((chunk) => chunk.happeningId === happening.id);
   }
 
-  it('is scattered by world events, worth 2 mass in the open', () => {
+  it('is scattered by world events, worth its size in mass in the open', () => {
     const world = emptyWorld();
     const chunks = meatDrop(world);
     expect(chunks.length).toBeGreaterThanOrEqual(WORLD_EVENTS.meatDrop.chunks.min - 3);
@@ -190,10 +192,10 @@ describe('meat', () => {
     const events = world.step(TICK, NO_INPUT);
 
     expect(events).toContainEqual({ type: 'meatEaten', meatId: chunk.id, dinoId: eater.id });
-    expect(eater.mass).toBe(MASS.start + FOOD_MASS.meat);
+    expect(eater.mass).toBe(MASS.start + MEAT_SIZES[chunk.size].mass);
   });
 
-  it('is worth four times as much in the Ashlands', () => {
+  it('is worth several times as much in the Ashlands', () => {
     const world = emptyWorld();
     const chunks = meatDrop(world, { x: 0, z: 22 });
     const eater = world.addPlayer('Eater');
@@ -202,7 +204,9 @@ describe('meat', () => {
     for (const other of chunks) if (other !== chunk) world.meat.delete(other.id);
     place(eater, chunk.x, chunk.z - 0.6);
     world.step(TICK, NO_INPUT);
-    expect(eater.mass).toBe(MASS.start + FOOD_MASS.meat * DANGER_ZONES.foodMultiplier.ashlands);
+    expect(eater.mass).toBe(
+      MASS.start + MEAT_SIZES[chunk.size].mass * DANGER_ZONES.foodMultiplier.ashlands,
+    );
   });
 
   it('rots away after a while', () => {
@@ -240,19 +244,42 @@ describe('danger zones', () => {
     expect(foodMultiplierAt(0, 20)).toBe(DANGER_ZONES.foodMultiplier.ashlands);
   });
 
-  it('make eggs worth more', () => {
+  it('make scraps worth more', () => {
     const world = emptyWorld();
     const dino = world.addPlayer('Brave');
     place(dino, 0, 18);
-    addEgg(world, mouth(dino));
+    addScrap(world, mouth(dino));
     world.step(TICK, NO_INPUT);
-    expect(dino.mass).toBe(MASS.start + FOOD_MASS.egg * DANGER_ZONES.foodMultiplier.ashlands);
+    expect(dino.mass).toBe(MASS.start + MEAT_SIZES[0].mass * DANGER_ZONES.foodMultiplier.ashlands);
+  });
+
+  it('hold a share of the meat, mostly in big pieces, and the rest of the island none', () => {
+    const world = new GameWorld({ seed: 5 });
+    const rich = world.scraps.filter((scrap) => scrap.rich);
+    expect(rich).toHaveLength(Math.round(SCRAPS.count * SCRAPS.dangerZoneShare));
+    for (const scrap of world.scraps) {
+      expect(dangerZoneAt(scrap.x, scrap.z) !== null).toBe(scrap.rich);
+    }
+    const bigShare = (scraps: typeof rich) =>
+      scraps.filter((scrap) => scrap.size > 0).length / scraps.length;
+    expect(bigShare(rich)).toBeGreaterThan(bigShare(world.scraps.filter((s) => !s.rich)));
+  });
+
+  it('make a haunch there worth dozens of plain scraps', () => {
+    const world = emptyWorld();
+    const dino = world.addPlayer('Brave');
+    place(dino, 0, 18);
+    addScrap(world, mouth(dino), 2);
+    world.step(TICK, NO_INPUT);
+    const value = dino.mass - MASS.start;
+    expect(value).toBe(MEAT_SIZES[2].mass * DANGER_ZONES.foodMultiplier.ashlands);
+    expect(value).toBeGreaterThanOrEqual(30 * MEAT_SIZES[0].mass);
   });
 });
 
 describe('world events', () => {
   it('start on a timer, are announced, and end once their food is gone', () => {
-    const world = new GameWorld({ seed: 3, eggs: 0, critters: 0 });
+    const world = new GameWorld({ seed: 3, scraps: 0, critters: 0 });
     const events = stepUntil(
       world,
       WORLD_EVENTS.firstAfterSeconds + 1,
@@ -293,7 +320,7 @@ describe('world events', () => {
   });
 
   it('keep apart, and never run more than a few at once', () => {
-    const world = new GameWorld({ seed: 12, eggs: 0, critters: 0 });
+    const world = new GameWorld({ seed: 12, scraps: 0, critters: 0 });
     let most = 0;
     for (let t = 0; t < 240; t += TICK) {
       world.step(TICK, NO_INPUT);
@@ -318,14 +345,14 @@ describe('critters', () => {
     place(dino, 60, 0);
     const critter = world.critters[0];
     critter.x = 60;
-    critter.z = 6;
+    critter.z = 3;
     critter.heading = 0;
 
     run(world, 0.25);
     expect(critter.fleeing).toBe(true);
     run(world, 0.75);
-    // Faster than a wandering critter could manage.
-    expect(Math.hypot(critter.x - dino.x, critter.z - dino.z)).toBeGreaterThan(9);
+    // Further than a wandering critter could manage (3 + 2.2 units), then it calms down.
+    expect(Math.hypot(critter.x - dino.x, critter.z - dino.z)).toBeGreaterThan(6.5);
   });
 
   it('tire after a short bolt, so a hunter running straight at them catches up', () => {
@@ -461,7 +488,7 @@ describe('the round loop', () => {
     const { world, big, middle, small, dead } = shortRound();
     const warning = stepUntil(world, 9, (e) => e.type === 'meteorWarning');
     expect(warning).toContainEqual({ type: 'meteorWarning' });
-    expect(world.round.clock).toBeCloseTo(8, 1);
+    expect(world.round.clock).toBeCloseTo(9, 1);
     dead.alive = false; // killed just before the end: no podium for the dead
     dead.respawnIn = 99;
 
@@ -514,11 +541,29 @@ describe('the round loop', () => {
     expect(world.rankOf(small)).toBe(3);
   });
 
-  it('lasts five minutes, with the warning at four and ten seconds of podium', () => {
-    expect(ROUND.durationSeconds).toBe(300);
-    expect(ROUND.meteorWarningAtSeconds).toBe(240);
+  it('lasts twenty minutes, with two minutes of warning and ten seconds of podium', () => {
+    expect(ROUND.durationSeconds).toBe(1200);
+    expect(ROUND.meteorWarningAtSeconds).toBe(1080);
     expect(ROUND.impactSequenceSeconds).toBe(3);
     expect(ROUND.intermissionSeconds).toBe(10);
-    expect(roundOfLength(10).meteorWarningAtSeconds).toBe(8);
+    expect(roundOfLength(10).meteorWarningAtSeconds).toBeCloseTo(9);
+  });
+});
+
+describe('test hooks', () => {
+  it('can tell a bot to hunt one dinosaur, biting it on sight', () => {
+    const world = emptyWorld({ bots: 1 });
+    const [bot] = world.dinos.values();
+    const prey = world.addPlayer('Prey');
+    world.setMass(bot, 100);
+    place(bot, 60, 0, 0);
+    place(prey, 60, 8);
+    world.setBotPrey(bot.id, prey.id, 30);
+
+    const events = stepUntil(world, 15, (e) => e.type === 'dinoKilled');
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'dinoKilled', killerId: bot.id, victimId: prey.id }),
+    );
   });
 });

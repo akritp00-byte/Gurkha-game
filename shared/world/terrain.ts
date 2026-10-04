@@ -244,7 +244,7 @@ export function heightAt(field: Heightfield, x: number, z: number): number {
 
 // --- Placement ------------------------------------------------------------------
 
-/** Dry land away from tar, lava and the island's edge: somewhere a dinosaur or an egg can go. */
+/** Dry land away from tar, lava and the island's edge: somewhere a dinosaur or a scrap can go. */
 export function isOpenGround(field: Heightfield, x: number, z: number): boolean {
   const r = Math.hypot(x, z);
   if (r > WORLD.walkableRadius - 2 || r < VOLCANO.blockedRadius + 2) return false;

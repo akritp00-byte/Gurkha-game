@@ -25,7 +25,7 @@ pnpm format                  # fix formatting
   - `eating.ts`: the eat rule (`outweighs`, bite zones, the wider `attackZone` of an aimed bite, `massGained`), carcass eating (`eatRate`, `canCarry`) and threat colours (`threatBetween`).
   - `visibility.ts`: fern hiding (`isHiddenInFerns`, `canSee`). Bots perceive through it, and the server will filter what clients receive with it.
   - `tiers.ts`: tier lookup and body scale.
-  - `sim/world.ts`: `GameWorld`, the whole simulation: dinosaurs and bots, eggs, meat, critters, vents, bites, carcasses (carried or on the ground), eating, death, respawn, spawn protection, world events (`happenings`: huge carcasses and meat drops) and the round loop with its podium. It also keeps each dinosaur's leaderboard `rank`. `step()` returns events (`dinoKilled`, `bite`, `tierChanged`, `happeningStarted`, `meteorImpact`, `roundStarted`, ...) for effects and network messages. Seeded, so the same seed and inputs replay exactly.
+  - `sim/world.ts`: `GameWorld`, the whole simulation: dinosaurs and bots, scraps, meat, critters, vents, bites, carcasses (carried or on the ground), eating, death, respawn, spawn protection, world events (`happenings`: huge carcasses and meat drops) and the round loop with its podium. It also keeps each dinosaur's leaderboard `rank`. `step()` returns events (`dinoKilled`, `bite`, `tierChanged`, `happeningStarted`, `meteorImpact`, `roundStarted`, ...) for effects and network messages. Seeded, so the same seed and inputs replay exactly.
   - `sim/round.ts`: round timings and phases (`playing`, `impact`, `podium`), shared by the world, the server and the HUD.
   - `sim/entities.ts`: the entity and event types. `sim/bots.ts`: bot brains (`botInput`), which steer, bite and eat. `sim/vents.ts`: the vent clock. `sim/names.ts`: bot names and event carcass species.
   - `world/layout.ts`: level design, meaning where the volcano, vents, river, tar pits, fern patches and danger zones (the Ashlands and the Tar Pits) are.
@@ -39,7 +39,11 @@ pnpm format                  # fix formatting
 - **`client/`** is Three.js + Vite, with no game engine. `assets/` and `audio/` come later.
   - `game/Game.ts`: the game loop. It samples input, advances a `Session` (`game/session.ts`), turns its events into effects and renders it. A session is either `game/OfflineSession.ts`, which steps `GameWorld` (with bots) in the browser at `NETWORK.tickRate` and interpolates between ticks (`poseHistory.ts`), or `net/OnlineSession.ts`.
   - `input/`: keyboard, held-mouse and touch-joystick steering, plus sprint (Shift or the touch button). The pure mappings live in `steering.ts`, so they can be unit tested.
-  - `render/`: `terrain.ts`, `vegetation.ts`, `eggs.ts`, `meat.ts`, `critters.ts`, `carcasses.ts`, `beacons.ts` and `threatRings.ts` (each one instanced draw call), `vents.ts`, `meteor.ts` (fireball, debris and shockwave), `environment.ts` (sky, fog, sun shadows that follow the player, and `setDoom` for the red meteor sky), `cameraRig.ts` (with punch, shake and rumble), `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each (`crowd.ts` keeps one view per dinosaur).
+  - `render/`:
+    - `loft.ts`: `MeshBuilder`, which lofts low-poly organic shapes (bodies, tails, fronds) from rings along a path, with flat colours and optional skinning. Every model is built with it at load time.
+    - `dino/`: `species.ts` (each tier's anatomy, colours and features), `dinoModel.ts` (a 17-bone skinned model per species, one draw call each), `DinoView.ts` (procedural idle, walk, run, bite, chew, carry and roar), `corpse.ts` (a kill's limp body, on the ground or in a killer's jaws) and `crowd.ts`.
+    - `terrain.ts` (ground, lava streams, tar and lava pools), `water.ts` (depth-coloured sea with surf), `vegetation.ts` (plants, rocks, dead trees and skeletons, instanced and split into patches so the GPU can skip those out of view; plants dissolve near the camera so they never hide the player), `food.ts` (meat in three sizes, gold-ringed in the danger zones), `carcasses.ts` and `herbivores.ts` (event carcasses), `critters.ts`, `threatRings.ts`, `beacons.ts`, `vents.ts`, `meteor.ts`, `effects.ts` (sparks, gore, dust, smoke and rings), `pterosaurs.ts`, `environment.ts` (sky with sun glow, clouds, fog, sun shadows that follow the player, and `setDoom` for the red meteor sky), `post.ts` (bloom on the high preset), `cameraRig.ts` (with punch, shake and rumble) and `quality.ts`.
+  - `audio/audio.ts`: `SoundBoard`, every sound synthesised with Web Audio (chomps, bites, kills, footsteps, roars, events, vents, the meteor, wind and birds). It starts on the first click or key press; M mutes it.
   - `ui/`: HUD with status chips and the stamina bar, round clock, leaderboard, minimap, podium, banners, name tags, kill feed, death card, F3 debug overlay, controls hint and CSS.
   - `net/`: `connect.ts` joins a room (or times out, and `main.ts` falls back to offline play). `OnlineSession.ts` sends inputs, predicts your own dinosaur with Colyseus' `Predict` reconciler and the shared step function, and interpolates everything else.
   - `dev/`: developer pages that aren't part of the build, e.g. `/dev/dinos.html`.
@@ -50,13 +54,19 @@ pnpm format                  # fix formatting
 
 ## Rule changes since the brief
 
-Asked for after M3, because progression felt slow. These override `BUILD_PROMPT.md` §3 and §8:
+Asked for after M3 and M4, because progression felt slow and the bots too strong. These override `BUILD_PROMPT.md` §1, §3, §7 and §8:
 
 - **Eating dinosaurs takes a bite**, not contact: left click (or Space, or the Bite button) kills anything 1.2× smaller in reach. Its carcass (70% of its mass) goes in your mouth; hold E (or the Eat button) to eat it. Biting a dinosaur too close in size to kill shoves it and knocks its food loose.
 - **Sprinting runs on stamina**, not mass, and drops no meat. Meat now comes from world events.
 - **Mouse steering uses the right button**, since the left one bites. E eats, so the M6 ability needs another key.
 - **World events and danger zones** were added: huge carcasses and meat drops on a timer, and zones where food is worth 3–4× more.
 - **Critters and fleeing bots are easier to catch** than the brief's numbers made them.
+- **Rounds last 20 minutes**, with the meteor warning for the last two.
+- **Bigger dinosaurs are a little faster** (speed grows with mass ^ 0.06, up to 13), so a lead snowballs. Small ones keep tighter turning and the ferns.
+- **Meat replaces eggs.** Food lying about is meat in three sizes, scraps (1), cuts (3) and haunches (8). A share of it always lies in the danger zones, mostly big pieces, worth 4–5× and slower to come back. Food is eaten on contact even with a carcass in your mouth.
+- **Bots are much weaker**: slow to react, lazy hunters that never sprint after prey and soon give up, wary of the danger zones, and once past `BOTS.maxHuntingMass` they stop hunting altogether. The top of the leaderboard is for players.
+- **A kill is drawn as the victim's limp body** in the killer's jaws (or lying on its side), not a slab of meat. World-event carcasses are dead plant-eaters with their ribs showing.
+- **Everything is made in code.** The dinosaurs, plants and props are procedural low-poly models with procedural animation, and every sound is synthesised with Web Audio, instead of the brief's GLB models and Howler.js samples: the asset sites are unreachable from cloud sessions, and this keeps the download tiny and the licensing simple.
 
 ## Conventions
 
@@ -77,8 +87,8 @@ Asked for after M3, because progression felt slow. These override `BUILD_PROMPT.
   - Anything integrated over frame time must stay stable at long frames: frames are clamped to 0.25 s, and springs are sub-stepped (see `cameraRig.ts`).
 - **Debug hooks:**
   - URL options: `?offline` (the sandbox, no server), `?name=`, `?room=` (a room of its own), `?seed=` (repeatable island and spawn), `?bots=` (offline default 15), `?mass=` (offline only), `?round=` (round length in seconds), `?debug` (open the F3 overlay) and `?quality=low|medium|high`. Online, only a test server honours `?seed=`, `?bots=` and `?round=`, when they come with the join that creates the room.
-  - Most browser tests play offline (`openGame` adds `?offline`). `openOnlineGame(page, { room, name })` joins the dev server instead, in a room of its own.
-  - `window.__extinct` provides `state()`, `others()`, `stats()`, `bots()`, `leaderboard()`, `podium()`, `carcasses()`, `setMass()`, `placeEggAhead()`, `placeDinoAhead()`, `teleport()`, `endProtection()` and `startEvent()` for tests and the console. Online, `setMass()`, `teleport()`, `endProtection()` and `startEvent()` become test commands, which only a server started with `--test-commands` (`pnpm dev`) obeys. Production servers ignore them. `placeEggAhead()`, `placeDinoAhead()` and `bots()` are offline only.
+  - Most browser tests play offline (`openGame` adds `?offline`), on the medium preset (`openGame(page, query, { quality: 'auto' })` lets the game choose, as the smoke and performance tests do). `openOnlineGame(page, { room, name })` joins the dev server instead, in a room of its own.
+  - `window.__extinct` provides `state()`, `others()`, `stats()`, `triangleBreakdown()`, `bots()`, `leaderboard()`, `podium()`, `carcasses()`, `setMass()`, `placeScrapAhead()`, `placeDinoAhead()`, `teleport()`, `endProtection()` and `startEvent()` for tests and the console. Online, `setMass()`, `teleport()`, `endProtection()` and `startEvent()` become test commands, which only a server started with `--test-commands` (`pnpm dev`) obeys. Production servers ignore them. `placeScrapAhead()`, `placeDinoAhead()` and `bots()` are offline only.
   - To bite something in a browser test, place a bot that stands still (`placeDinoAhead(page, mass, distance, facing, side, true)`) and `clickToBite(page)`: a live bot runs off before a slow page's click lands.
 - **Dependencies:** as few as possible. Explain why before adding one. Ask before changing the stack, buying assets or signing up for paid services.
 - **Secrets:** `.env` is git-ignored. Update `.env.example` whenever you add a variable. Browser-visible variables must start with `VITE_` and must never hold secrets.

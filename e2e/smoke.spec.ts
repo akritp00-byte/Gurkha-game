@@ -22,15 +22,18 @@ test.beforeAll(async () => {
 test('boots the island sandbox with a dinosaur, HUD and debug overlay, without console errors', async ({
   page,
 }, testInfo) => {
+  test.slow(); // the desktop preset's bloom takes seconds a frame without a GPU
   const errors = watchForErrors(page);
-  await openGame(page, '&debug');
+  // The game's own choice of preset: high, with bloom, on a desktop.
+  await openGame(page, '&debug', { quality: 'auto' });
 
   const canvas = page.locator('#game');
   expect(
     await canvas.evaluate((element: HTMLCanvasElement) => element.getContext('webgl2') !== null),
   ).toBe(true);
-  await expect(page.getByTestId('hud')).toContainText('Compsognathus');
-  await expect(page.getByTestId('debug-overlay')).toContainText('Draw calls');
+  // The first frames with bloom are very slow without a GPU, so allow them time.
+  await expect(page.getByTestId('hud')).toContainText('Compsognathus', { timeout: 30_000 });
+  await expect(page.getByTestId('debug-overlay')).toContainText('Draw calls', { timeout: 30_000 });
   await expect(page.getByTestId('server-status')).toHaveAttribute('data-status', 'online');
 
   // Software rendering (no GPU on test machines) says nothing about real frame rates, so the

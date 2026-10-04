@@ -1,4 +1,6 @@
 import {
+  attackZone,
+  bodyRadius,
   CAMERA,
   CARCASS_SPECIES,
   canSee,
@@ -22,34 +24,51 @@ import {
   threatBetween,
   tierForMass,
   timeToNextRound,
+  VOLCANO,
   VOLCANO_VENTS,
   warningProgress,
   WORLD,
+  zoneTouches,
 } from '@extinct/shared';
 import {
+  type BufferGeometry,
   type Fog,
   type Group,
   type HemisphereLight,
-  type Mesh,
+  InstancedMesh,
+  Mesh,
   PCFShadowMap,
   Scene,
   Vector3,
   WebGLRenderer,
 } from 'three';
+import { SoundBoard } from '../audio/audio.ts';
 import { Controls } from '../input/controls.ts';
 import { BeaconsView } from '../render/beacons.ts';
 import { CameraRig } from '../render/cameraRig.ts';
-import { CarcassesView, type CarrierPose } from '../render/carcasses.ts';
+import { CarcassesView } from '../render/carcasses.ts';
 import { CrittersView } from '../render/critters.ts';
+import type { Grip } from '../render/dino/corpse.ts';
 import { DinoCrowd } from '../render/dino/crowd.ts';
-import { EggsView } from '../render/eggs.ts';
-import { createAmbientLight, createFog, createSky, setDoom, Sun } from '../render/environment.ts';
-import { MeatView } from '../render/meat.ts';
+import type { DinoView } from '../render/dino/DinoView.ts';
+import { Effects } from '../render/effects.ts';
+import {
+  Clouds,
+  createAmbientLight,
+  createFog,
+  createSky,
+  setDoom,
+  Sun,
+} from '../render/environment.ts';
+import { FoodView } from '../render/food.ts';
 import { MeteorView } from '../render/meteor.ts';
 import type { QualitySettings } from '../render/quality.ts';
-import { animateLava, createPools, createTerrain, createWater } from '../render/terrain.ts';
+import { animateLava, createLavaFlows, createPools, createTerrain } from '../render/terrain.ts';
+import { Water } from '../render/water.ts';
+import { PostProcessing } from '../render/post.ts';
+import { Pterosaurs } from '../render/pterosaurs.ts';
 import { ThreatRings } from '../render/threatRings.ts';
-import { createVegetation } from '../render/vegetation.ts';
+import { createVegetation, SEE_THROUGH } from '../render/vegetation.ts';
 import { VentsView } from '../render/vents.ts';
 import { Banner } from '../ui/banner.ts';
 import { DeathScreen } from '../ui/deathScreen.ts';
@@ -64,6 +83,7 @@ import { Podium } from '../ui/podium.ts';
 import { RoundTimer } from '../ui/roundTimer.ts';
 import type { PoseSample } from './poseHistory.ts';
 import type {
+  BotBehaviour,
   BotSummary,
   Session,
   SessionCarcass,
@@ -81,6 +101,13 @@ const NAME_TAG_DISTANCE_PER_SCALE = 8;
 const NAME_TAG_HEIGHT = 1.1;
 /** Eating dinosaurs chew this often. */
 const CHEW_SECONDS = 0.35;
+/** A footstep every this many body scales walked; other dinosaurs' steps are heard once they're this big. */
+const FOOTSTEP_SPACING = 1.1;
+const BIG_FOOTSTEPS_SCALE = 2.6;
+/** Sprinting kicks up a puff of dust this often. */
+const DUST_EVERY_MS = 70;
+/** The volcano puffs out smoke this often (twice as often by the meteor). */
+const SMOKE_EVERY_MS = 160;
 
 export interface GameOptions {
   readonly quality: QualitySettings;
@@ -113,7 +140,7 @@ export interface DebugState {
   hidden: boolean;
   /** Name of whoever caught the player last, if anyone. */
   eatenBy: string | null;
-  eggsAlive: number;
+  scrapsAlive: number;
   meat: number;
   carcasses: number;
   dinosAlive: number;
@@ -148,6 +175,8 @@ export interface OtherDino {
 export interface DebugApi {
   state(): DebugState;
   stats(): { fps: number; cpuMs: number; drawCalls: number; triangles: number };
+  /** Triangles each named part of the scene would draw, biggest first (for performance work). */
+  triangleBreakdown(): { name: string; triangles: number }[];
   /** Every other dinosaur this client can see. */
   others(): OtherDino[];
   bots(): BotSummary[];
@@ -164,20 +193,20 @@ export interface DebugApi {
   podium(): SessionStanding[];
   /** Every carcass this client can see. */
   carcasses(): CarcassInfo[];
-  /** Offline only: move an egg to this many units in front of the player. */
-  placeEggAhead(distance: number): void;
+  /** Offline only: move a plain scrap of meat (worth 1) to this many units in front of the player. */
+  placeScrapAhead(distance: number): void;
   /**
    * Offline only: put a bot of `mass` this far in front of the player (and `side` units to its
-   * right), facing `toward` the player or `away` from it, with no spawn protection. With
-   * `still`, it stands there doing nothing for a minute. It takes the bot furthest from the
-   * player, so repeated calls place different bots. Returns its id.
+   * right), facing `toward` the player or `away` from it, with no spawn protection, doing
+   * what `behaviour` says (see BotBehaviour). It takes the bot furthest from the player, so
+   * repeated calls place different bots. Returns its id.
    */
   placeDinoAhead(
     mass: number,
     distance: number,
     facing: 'toward' | 'away',
     side?: number,
-    still?: boolean,
+    behaviour?: BotBehaviour,
   ): number;
 }
 
@@ -194,21 +223,27 @@ export class Game {
   private readonly scene = new Scene();
   private readonly field: Heightfield;
   private readonly quality: QualitySettings;
+  private readonly touchFirst: boolean;
   private readonly cameraRig: CameraRig;
   private readonly sun: Sun;
   private readonly sky: Mesh;
   private readonly fog: Fog;
   private readonly ambient: HemisphereLight;
   private readonly pools: Group;
-  private readonly eggs: EggsView;
+  private readonly food: FoodView;
   private readonly crowd: DinoCrowd;
   private readonly rings: ThreatRings;
-  private readonly meat: MeatView;
   private readonly critters: CrittersView;
   private readonly vents: VentsView;
   private readonly carcasses: CarcassesView;
   private readonly beacons: BeaconsView;
   private readonly meteor: MeteorView;
+  private readonly effects = new Effects();
+  private readonly water: Water;
+  private readonly post: PostProcessing | undefined;
+  private readonly clouds = new Clouds();
+  private readonly pterosaurs = new Pterosaurs();
+  private readonly sound = new SoundBoard();
   private readonly controls: Controls;
   private readonly hud: Hud;
   private readonly overlay: DebugOverlay;
@@ -227,15 +262,17 @@ export class Game {
   private input: PlayerInput = IDLE_INPUT;
   /** When each eating dinosaur last chewed, for the chewing animation. */
   private readonly chewedAt = new Map<number, number>();
+  /** Distance each dinosaur has walked since its last footstep, and since its last puff of dust. */
+  private readonly strides = new Map<number, number>();
+  private readonly dustAt = new Map<number, number>();
+  /** The player's mass last frame, to notice food going down. */
+  private lastMass = 0;
+  private smokeAt = 0;
   /** The player's place when the meteor hit (0 if it was dead by then), for the podium. */
   private placeAtImpact = 0;
   private impactAt = Number.NEGATIVE_INFINITY;
-  private readonly carrier: { x: number; z: number; heading: number; scale: number } = {
-    x: 0,
-    z: 0,
-    heading: 0,
-    scale: 1,
-  };
+  private readonly grip: { mouth: Vector3; heading: number } = { mouth: new Vector3(), heading: 0 };
+  private readonly mouthAt = new Vector3();
   private lastFrameMs: number | undefined;
   /** The picture freezes until this time (ms) after you eat a dinosaur. */
   private hitstopUntil = 0;
@@ -254,6 +291,7 @@ export class Game {
     this.session = session;
     this.canvas = canvas;
     this.quality = options.quality;
+    this.touchFirst = options.touchFirst;
     this.field = options.field;
     this.renderer = new WebGLRenderer({
       canvas,
@@ -270,9 +308,10 @@ export class Game {
     this.sun = new Sun(this.scene, options.quality);
     this.ambient = createAmbientLight();
     this.pools = createPools();
-    this.eggs = new EggsView(session.eggs, this.field);
+    this.pools.add(createLavaFlows(this.field));
+    this.water = new Water(this.field);
+    this.food = new FoodView(session.scraps, this.field);
     this.rings = new ThreatRings(this.field, ROOM.maxPlayers);
-    this.meat = new MeatView(this.field);
     this.critters = new CrittersView(this.field, CRITTERS.count);
     this.vents = new VentsView(this.field);
     this.carcasses = new CarcassesView(this.field);
@@ -282,20 +321,27 @@ export class Game {
       this.sky,
       this.ambient,
       createTerrain(this.field),
-      createWater(),
+      this.water.mesh,
+      this.clouds.mesh,
+      this.pterosaurs.group,
       this.pools,
       createVegetation(this.field, options.quality),
-      this.eggs.mesh,
+      this.food.group,
       this.rings.mesh,
-      this.meat.mesh,
       this.critters.mesh,
       this.vents.group,
-      this.carcasses.mesh,
+      this.carcasses.group,
       this.beacons.mesh,
       this.meteor.group,
+      this.effects.group,
     );
     this.crowd = new DinoCrowd(this.scene);
     this.cameraRig = new CameraRig(this.field);
+    // Bloom renders the scene several times a frame, so count draw calls over the whole frame.
+    this.renderer.info.autoReset = false;
+    this.post = options.quality.bloom
+      ? new PostProcessing(this.renderer, this.scene, this.cameraRig.camera)
+      : undefined;
 
     this.controls = new Controls(canvas, ui, options.touchFirst);
     this.nameTags = new NameTags(ui);
@@ -356,21 +402,28 @@ export class Game {
     const player = this.session.player;
     for (const event of events) {
       switch (event.type) {
-        case 'eggEaten':
-          this.eggs.eggEaten(event.slot);
+        case 'scrapEaten':
+          this.food.scrapEaten(event.slot);
           break;
-        case 'eggSpawned':
-          this.eggs.eggSpawned(event.slot);
+        case 'scrapSpawned':
+          this.food.scrapSpawned(event.slot);
           break;
         case 'bite':
           // Your own bite already played when you clicked.
-          if (event.dinoId !== player?.id) this.crowd.find(event.dinoId)?.bite();
+          if (event.dinoId !== player?.id) {
+            this.crowd.find(event.dinoId)?.bite();
+            const biter = this.session.dinos.get(event.dinoId);
+            if (biter) this.sound.snap(this.crowd.viewOf(biter).bodyScale, biter);
+          }
           break;
         case 'dinoKilled':
           this.dinoKilled(event, timeMs);
           break;
         case 'shoved':
-          if (event.dinoId === player?.id) this.cameraRig.punch(CAMERA.shovePunch);
+          if (event.dinoId === player?.id) {
+            this.cameraRig.punch(CAMERA.shovePunch);
+            this.sound.thud();
+          }
           break;
         case 'dinoSpawned': {
           const dino = this.session.dinos.get(event.dinoId);
@@ -386,6 +439,23 @@ export class Game {
         case 'ventErupted': {
           if (!player?.alive) break;
           const vent = VOLCANO_VENTS[event.vent];
+          const ventAt = { x: vent.x, y: heightAt(this.field, vent.x, vent.z), z: vent.z };
+          this.effects.burst('smoke', ventAt, 14, {
+            speed: 9,
+            size: 2.4,
+            life: 3,
+            color: 0xd8d2c8,
+            lift: 0.9,
+            spread: 0.3,
+          });
+          this.effects.burst('ember', ventAt, 20, {
+            speed: 12,
+            size: 0.6,
+            life: 1.4,
+            color: 0xff7a2a,
+            lift: 0.85,
+          });
+          this.sound.eruption(vent);
           const distance = Math.hypot(vent.x - player.x, vent.z - player.z);
           if (distance < CAMERA.ventPunchDistance) {
             this.cameraRig.punch(CAMERA.ventPunch * (1 - distance / CAMERA.ventPunchDistance));
@@ -394,6 +464,7 @@ export class Game {
         }
         case 'happening':
           this.announce(event, timeMs);
+          this.sound.horn();
           break;
         case 'meteorWarning':
           this.banner.show(timeMs, 'The meteor is coming! Be the biggest when it hits.', 'meteor');
@@ -402,6 +473,8 @@ export class Game {
           this.placeAtImpact = player?.alive ? player.rank : 0;
           this.impactAt = timeMs;
           this.cameraRig.shake(EFFECTS.impactShake);
+          this.sound.impact();
+          this.impactBlast();
           this.deathScreen.hide();
           break;
         case 'roundStarted':
@@ -412,6 +485,29 @@ export class Game {
           break;
       }
     }
+  }
+
+  /** The meteor's blast: fire and ash rolling over the island, and a ring of light racing out. */
+  private impactBlast(): void {
+    const at = { x: this.focus.x, y: this.focus.y + 0.5, z: this.focus.z };
+    this.effects.ring(at, 140, 2.4, 0xffa040);
+    this.effects.ring(at, 60, 1.4, 0xfff0c0);
+    this.effects.burst('smoke', at, 40, {
+      speed: 26,
+      size: 9,
+      life: 4,
+      color: 0x5a3a2c,
+      lift: 0.25,
+      spread: 0.4,
+    });
+    this.effects.burst('ember', at, 80, {
+      speed: 30,
+      size: 1.2,
+      life: 2.5,
+      color: 0xff7a2a,
+      lift: 0.5,
+      spread: 0.9,
+    });
   }
 
   /** Tell everyone about a world event, and where to find it. */
@@ -429,6 +525,25 @@ export class Game {
   private dinoKilled(event: Extract<SessionEvent, { type: 'dinoKilled' }>, timeMs: number): void {
     const playerId = this.session.player?.id;
     this.crowd.find(event.killerId)?.bite();
+    // A spray of gore where the victim was.
+    const victim = this.poses.get(event.victimId);
+    if (victim) {
+      const scale = Math.cbrt(Math.max(event.victimMass, 1) / 10);
+      const at = {
+        x: victim.x,
+        y: heightAt(this.field, victim.x, victim.z) + 0.5 * scale,
+        z: victim.z,
+      };
+      this.effects.burst('blood', at, 18, {
+        speed: 4 * Math.sqrt(scale),
+        size: 0.18 * scale,
+        life: 0.9,
+        color: 0xa3221c,
+        lift: 0.6,
+      });
+      this.sound.kill(victim);
+    }
+    if (event.victimId === playerId) this.sound.death();
     const involvesYou = event.killerId === playerId || event.victimId === playerId;
     const killerName = event.killerId === playerId ? 'You' : event.killerName;
     const victimName = event.victimId === playerId ? 'You' : event.victimName;
@@ -479,8 +594,9 @@ export class Game {
       if (!visible) continue;
       view.setGlow(dino.protectedFor > 0 ? pulse : 0);
       const pose = this.poses.get(dino.id) ?? dino;
-      view.update(dt, { ...pose, mass: dino.mass }, this.field);
+      view.update(dt, { ...pose, mass: dino.mass, carrying: dino.carrying }, this.field);
       if (dino.eating) this.chew(dino.id, timeMs);
+      this.feel(dino, pose, view, dt, timeMs, dino === player);
       if (dino !== player) {
         this.rings.add(pose.x, pose.z, view.bodyScale, threatBetween(player.mass, dino.mass));
       }
@@ -499,6 +615,9 @@ export class Game {
     });
     const camera = this.cameraRig.camera;
     const zoom = this.cameraRig.zoomLevel;
+    // Plants between the camera and the dinosaur dissolve so they never hide it.
+    SEE_THROUGH.value =
+      camera.position.distanceTo(this.focus.set(subjectPose.x, ground, subjectPose.z)) * 0.85;
 
     // Bigger dinosaurs see further, and their shadows reach further.
     this.fog.near = 30 + 10 * zoom;
@@ -507,15 +626,22 @@ export class Game {
     this.sun.follow(this.focus, 22 + 9 * zoom);
     this.updateDoom(timeMs);
     this.sky.position.copy(camera.position);
-    this.eggs.update(dt);
-    this.meat.update(session.meat);
+    this.food.update(dt, session.meat);
+    this.noticeFood(player);
+    this.smoke(timeMs);
+    this.effects.update(dt, camera);
+    this.sound.setListener(subjectPose.x, subjectPose.z);
     this.critters.update(dt, session.critters, (critter, out) => session.critterPose(critter, out));
     this.vents.update(session.time);
-    this.carcasses.update(session.carcasses, (carcass) => this.carrierPose(carcass));
+    this.carcasses.update(dt, session.carcasses, subjectPose, (carcass) => this.gripOf(carcass));
     this.beacons.update(session.happenings, time);
     animateLava(this.pools, time);
+    this.water.update(time);
+    this.pterosaurs.update(time);
 
-    this.renderer.render(this.scene, camera);
+    this.renderer.info.reset();
+    if (this.post) this.post.render(camera);
+    else this.renderer.render(this.scene, camera);
     if (!this.rendered) {
       this.rendered = true;
       this.canvas.dataset.ready = 'true'; // lets smoke tests wait for the first frame
@@ -528,24 +654,131 @@ export class Game {
     this.dinoOnScreen.y = ((1 - this.projected.y) / 2) * this.canvas.clientHeight;
   }
 
-  /** Eating dinosaurs chew: a bite every CHEW_SECONDS. */
+  /** Eating dinosaurs chew: a bite every CHEW_SECONDS, with a chomp and a few scraps flying. */
   private chew(id: number, timeMs: number): void {
     if (timeMs - (this.chewedAt.get(id) ?? Number.NEGATIVE_INFINITY) < CHEW_SECONDS * 1000) return;
     this.chewedAt.set(id, timeMs);
-    this.crowd.find(id)?.bite();
+    const view = this.crowd.find(id);
+    if (!view) return;
+    view.chew();
+    view.mouth(this.mouthAt);
+    const scale = view.bodyScale;
+    this.effects.burst('blood', this.mouthAt, 3, {
+      speed: 2.2 * Math.sqrt(scale),
+      size: 0.1 * scale,
+      life: 0.6,
+      color: 0x9c2a22,
+      lift: 0.7,
+    });
+    this.sound.chomp(4 * scale, { x: this.mouthAt.x, z: this.mouthAt.z });
   }
 
-  /** Where to draw a carried carcass: in its carrier's mouth, wherever that's drawn this frame. */
-  private carrierPose(carcass: SessionCarcass): CarrierPose | undefined {
+  /** Footsteps, roars on evolving, and dust kicked up by sprinting. */
+  private feel(
+    dino: SessionDino,
+    pose: { readonly x: number; readonly z: number; readonly speed: number },
+    view: DinoView,
+    dt: number,
+    timeMs: number,
+    isPlayer: boolean,
+  ): void {
+    const scale = view.bodyScale;
+    const ground = heightAt(this.field, pose.x, pose.z);
+    if (view.takeEvolution()) {
+      this.effects.evolve({ x: pose.x, y: ground, z: pose.z }, scale);
+      this.sound.roar(view.species, true, pose);
+    }
+    const walked = (this.strides.get(dino.id) ?? 0) + pose.speed * dt;
+    if (walked > FOOTSTEP_SPACING * scale) {
+      this.strides.set(dino.id, 0);
+      if (isPlayer || scale > BIG_FOOTSTEPS_SCALE) this.sound.footstep(scale, pose);
+    } else {
+      this.strides.set(dino.id, walked);
+    }
+    if (dino.sprinting && timeMs - (this.dustAt.get(dino.id) ?? 0) > DUST_EVERY_MS) {
+      this.dustAt.set(dino.id, timeMs);
+      this.effects.burst('dust', { x: pose.x, y: ground + 0.1 * scale, z: pose.z }, 2, {
+        speed: 1.2 * scale,
+        size: 0.28 * scale,
+        life: 0.7,
+        color: 0xc8b48a,
+        lift: 0.3,
+      });
+    }
+  }
+
+  /** A chomp and a spray of meat when the player gulps down some food. */
+  private noticeFood(player: SessionDino): void {
+    const gained = player.mass - this.lastMass;
+    if (player.alive && this.lastMass > 0 && gained > 0.4 && !player.eating) {
+      const view = this.crowd.find(player.id);
+      if (view) {
+        view.mouth(this.mouthAt);
+        const scale = view.bodyScale;
+        this.effects.burst('blood', this.mouthAt, 4 + Math.min(Math.round(gained), 10), {
+          speed: 2.5 * Math.sqrt(scale),
+          size: 0.1 * scale,
+          life: 0.5,
+          color: 0xb8352d,
+          lift: 0.7,
+        });
+        if (dangerZoneAt(player.x, player.z) !== null) {
+          this.effects.burst('spark', this.mouthAt, 16, {
+            speed: 4 * Math.sqrt(scale),
+            size: 0.3 * scale,
+            life: 0.8,
+            color: 0xffcf4a,
+            lift: 0.8,
+          });
+        }
+      }
+      this.sound.chomp(gained);
+    }
+    this.lastMass = player.alive ? player.mass : 0;
+  }
+
+  /** The volcano smokes, and spits embers, more and more as the meteor nears. */
+  private smoke(timeMs: number): void {
+    if (timeMs < this.smokeAt) return;
+    const doom =
+      this.session.round.phase === 'playing'
+        ? warningProgress(this.session.round.clock, this.session.round.settings)
+        : 1;
+    this.smokeAt = timeMs + SMOKE_EVERY_MS * (1 - 0.5 * doom);
+    const crater = {
+      x: (Math.random() - 0.5) * 6,
+      y: VOLCANO.peakHeight - 3,
+      z: (Math.random() - 0.5) * 6,
+    };
+    this.effects.burst('smoke', crater, 1, {
+      speed: 2.5,
+      size: 5 + 3 * doom,
+      life: 10,
+      color: doom > 0.5 ? 0x3a302c : 0x6c6560,
+      lift: 0.95,
+      spread: 0.2,
+    });
+    if (Math.random() < 0.3 + 0.5 * doom) {
+      this.effects.burst('ember', crater, 3, {
+        speed: 9,
+        size: 0.9,
+        life: 2.2,
+        color: 0xff8a30,
+        lift: 0.9,
+      });
+    }
+  }
+
+  /** Where to draw a carried carcass: in its carrier's jaws, wherever they are this frame. */
+  private gripOf(carcass: SessionCarcass): Grip | undefined {
     const carrier =
       carcass.carrierId === null ? undefined : this.session.dinos.get(carcass.carrierId);
     if (!carrier?.alive) return undefined;
-    const pose = this.poses.get(carrier.id) ?? carrier;
-    this.carrier.x = pose.x;
-    this.carrier.z = pose.z;
-    this.carrier.heading = pose.heading;
-    this.carrier.scale = this.crowd.viewOf(carrier).bodyScale;
-    return this.carrier;
+    const view = this.crowd.find(carrier.id);
+    if (!view) return undefined;
+    view.mouth(this.grip.mouth);
+    this.grip.heading = (this.poses.get(carrier.id) ?? carrier).heading;
+    return this.grip;
   }
 
   /**
@@ -564,8 +797,11 @@ export class Game {
     this.meteor.update(phase === 'playing' ? doom : 0, impact, timeMs / 1000, this.focus);
     const flash = clamp(1 - (timeMs - this.impactAt) / (EFFECTS.impactFlashSeconds * 1000), 0, 1);
     setDoom({ sky: this.sky, fog: this.fog, ambient: this.ambient, sun: this.sun }, doom, flash);
+    this.clouds.update(timeMs / 1000, doom);
     this.impactFlash.style.opacity = flash.toFixed(3);
     this.cameraRig.rumble(phase === 'playing' ? EFFECTS.meteorRumble * doom : 0);
+    this.sound.setRumble(phase === 'playing' ? doom : 0);
+    this.sound.update(timeMs / 1000, doom);
   }
 
   private placeNameTags(zoom: number, player: SessionDino): void {
@@ -634,7 +870,7 @@ export class Game {
       pingMs: this.session.pingMs,
       entities: {
         dinos: this.dinosAlive(),
-        eggs: this.eggsAlive(),
+        scraps: this.scrapsAlive(),
         meat: this.session.meat.size,
         critters: this.crittersAlive(),
       },
@@ -668,6 +904,11 @@ export class Game {
       );
     } else if (player.eating) {
       chips.push({ kind: 'eating', text: 'Eating' });
+    } else if (this.carcassInReach(player)) {
+      chips.push({
+        kind: 'carrying',
+        text: this.touchFirst ? 'Hold Eat to eat this carcass' : 'Hold E to eat this carcass',
+      });
     }
     const zone = dangerZoneAt(player.x, player.z);
     if (zone !== null) {
@@ -692,6 +933,20 @@ export class Game {
     return chips;
   }
 
+  /** Whether a carcass on the ground is close enough to eat from (as GameWorld decides it). */
+  private carcassInReach(player: SessionDino): boolean {
+    const zone = attackZone(player, player.mass);
+    const body = bodyRadius(player.mass);
+    for (const carcass of this.session.carcasses.values()) {
+      if (carcass.carrierId !== null) continue;
+      if (zoneTouches(zone, carcass.x, carcass.z, carcass.radius)) return true;
+      if (Math.hypot(carcass.x - player.x, carcass.z - player.z) <= carcass.radius + body) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Food left in the carcass the player is carrying. */
   private carriedFood(player: SessionDino): number {
     for (const carcass of this.session.carcasses.values()) {
@@ -713,9 +968,9 @@ export class Game {
     }
   }
 
-  private eggsAlive(): number {
+  private scrapsAlive(): number {
     let alive = 0;
-    for (const egg of this.session.eggs) if (egg.alive) alive++;
+    for (const scrap of this.session.scraps) if (scrap.alive) alive++;
     return alive;
   }
 
@@ -735,10 +990,20 @@ export class Game {
     const width = Math.max(this.canvas.clientWidth, 1);
     const height = Math.max(this.canvas.clientHeight, 1);
     this.renderer.setSize(width, height, false);
+    this.post?.setSize(width, height, this.renderer.getPixelRatio());
     this.cameraRig.setAspect(width / height);
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.code === 'KeyM' && !event.repeat) {
+      const muted = this.sound.toggleMute();
+      this.banner.show(
+        performance.now(),
+        muted ? 'Sound off (M to turn it on)' : 'Sound on',
+        'round',
+      );
+      return;
+    }
     if (event.code !== 'F3') return;
     event.preventDefault(); // F3 is "find next" in some browsers
     this.overlay.toggle();
@@ -775,7 +1040,7 @@ export class Game {
           rank: player?.rank ?? 0,
           hidden: player ? isHiddenInFerns(player) : false,
           eatenBy: eater?.name ?? null,
-          eggsAlive: this.eggsAlive(),
+          scrapsAlive: this.scrapsAlive(),
           meat: session.meat.size,
           carcasses: session.carcasses.size,
           dinosAlive: this.dinosAlive(),
@@ -793,6 +1058,21 @@ export class Game {
         drawCalls: this.renderer.info.render.calls,
         triangles: this.renderer.info.render.triangles,
       }),
+      triangleBreakdown: () => {
+        const totals = new Map<string, number>();
+        this.scene.traverseVisible((object) => {
+          if (!(object instanceof Mesh)) return;
+          const geometry = object.geometry as BufferGeometry;
+          const perCopy = (geometry.index?.count ?? geometry.getAttribute('position').count) / 3;
+          const copies = object instanceof InstancedMesh ? object.count : 1;
+          const name =
+            [object.name, object.parent?.name ?? ''].find((label) => label !== '') ?? object.type;
+          totals.set(name, (totals.get(name) ?? 0) + perCopy * copies);
+        });
+        return [...totals]
+          .map(([name, triangles]) => ({ name, triangles: Math.round(triangles) }))
+          .sort((a, b) => b.triangles - a.triangles);
+      },
       others: () =>
         [...session.dinos.values()]
           .filter((dino) => dino !== session.player)
@@ -828,13 +1108,13 @@ export class Game {
           kind: carcass.kind,
           carrierId: carcass.carrierId,
         })),
-      placeEggAhead: (distance) => {
-        if (!session.test.placeEggAhead) throw offlineOnly('placeEggAhead');
-        session.test.placeEggAhead(distance);
+      placeScrapAhead: (distance) => {
+        if (!session.test.placeScrapAhead) throw offlineOnly('placeScrapAhead');
+        session.test.placeScrapAhead(distance);
       },
-      placeDinoAhead: (mass, distance, facing, side, still) => {
+      placeDinoAhead: (mass, distance, facing, side, behaviour) => {
         if (!session.test.placeDinoAhead) throw offlineOnly('placeDinoAhead');
-        return session.test.placeDinoAhead(mass, distance, facing, side, still);
+        return session.test.placeDinoAhead(mass, distance, facing, side, behaviour);
       },
     };
   }

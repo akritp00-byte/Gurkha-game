@@ -3,7 +3,7 @@ import type {
   NetCarcass,
   NetCritter,
   NetDino,
-  NetEgg,
+  NetScrap,
   NetHappening,
   NetMeat,
   NetRound,
@@ -49,15 +49,25 @@ export const DinoState = schema(
 );
 export type DinoState = InstanceType<typeof DinoState>;
 
-export const EggState = schema(
-  { x: t.float32().default(0), z: t.float32().default(0), alive: t.boolean().default(false) },
-  'Egg',
+export const ScrapState = schema(
+  {
+    x: t.float32().default(0),
+    z: t.float32().default(0),
+    size: t.uint8().default(0),
+    alive: t.boolean().default(false),
+  },
+  'Scrap',
 );
-export type EggState = InstanceType<typeof EggState>;
+export type ScrapState = InstanceType<typeof ScrapState>;
 
 /** `born` is the tick it was dropped, so clients can work out its age without updates. */
 export const MeatState = schema(
-  { x: t.float32().default(0), z: t.float32().default(0), born: t.uint32().default(0) },
+  {
+    x: t.float32().default(0),
+    z: t.float32().default(0),
+    size: t.uint8().default(0),
+    born: t.uint32().default(0),
+  },
   'Meat',
 );
 export type MeatState = InstanceType<typeof MeatState>;
@@ -84,6 +94,8 @@ export const CarcassState = schema(
     size: t.float32().default(0),
     radius: t.float32().default(0),
     kind: t.uint8().default(0),
+    bodyMass: t.float32().default(0),
+    variant: t.uint8().default(0),
     carrier: t.uint16().default(0),
   },
   'Carcass',
@@ -138,9 +150,9 @@ export const GameState = schema(
   {
     /** Ticks simulated so far: world time is tick / NETWORK.tickRate (the vents run on it). */
     tick: t.uint32().default(0),
-    /** Keyed by dinosaur id; eggs by slot, meat, critters and carcasses by id. */
+    /** Keyed by dinosaur id; scraps by slot, meat, critters and carcasses by id. */
     dinos: t.map(DinoState).view(),
-    eggs: t.map(EggState).view(),
+    scraps: t.map(ScrapState).view(),
     meat: t.map(MeatState).view(),
     critters: t.map(CritterState).view(),
     carcasses: t.map(CarcassState).view(),
@@ -175,7 +187,7 @@ type Expect<T extends true> = T;
 type Fits<Actual, Expected> = [Actual] extends [Expected] ? true : false;
 export type SchemaMatchesProtocol = [
   Expect<Fits<DinoState, NetDino>>,
-  Expect<Fits<EggState, NetEgg>>,
+  Expect<Fits<ScrapState, NetScrap>>,
   Expect<Fits<MeatState, NetMeat>>,
   Expect<Fits<CritterState, NetCritter>>,
   Expect<Fits<CarcassState, NetCarcass>>,

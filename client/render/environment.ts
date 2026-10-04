@@ -4,31 +4,48 @@ import {
   DirectionalLight,
   Fog,
   HemisphereLight,
+  IcosahedronGeometry,
+  InstancedMesh,
+  Matrix4,
   Mesh,
+  MeshLambertMaterial,
+  Quaternion,
   type Scene,
   ShaderMaterial,
   SphereGeometry,
   Vector3,
 } from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { QualitySettings } from './quality.ts';
 
-const SKY_ZENITH = new Color(0x3d9be9);
-const SKY_HORIZON = new Color(0xcdeeff);
+const SKY_ZENITH = new Color(0x3a8fdc);
+/** A warm, humid haze on the horizon: the fog fades into it. */
+const SKY_HORIZON = new Color(0xd8ecd8);
 /** The apocalyptic sky of the meteor's last minute (BUILD_PROMPT.md §6). */
 const DOOM_ZENITH = new Color(0x4a0d0b);
 const DOOM_HORIZON = new Color(0xff7040);
 const DOOM_SUN = new Color(0xff8a50);
-const DAY_SUN = new Color(0xfff1dc);
-const DAY_AMBIENT = 1.35;
+const DAY_SUN = new Color(0xffe6c0);
+const DAY_AMBIENT = 1.25;
 const DOOM_AMBIENT = 0.8;
 const WHITE = new Color(0xffffff);
+const SUN_GLOW = new Color(0xfff2d0);
+const DOOM_SUN_GLOW = new Color(0xff5a20);
 
-/** Gradient sky dome that follows the camera. Its horizon colour is also the fog colour. */
+/** Unit vector from the ground towards the sun (the sky's glow and the shadows agree). */
+export const TO_SUN = new Vector3(-0.45, 0.85, 0.35).normalize();
+
+/**
+ * Gradient sky dome that follows the camera, with a soft sun and its glow. Its horizon colour
+ * is also the fog colour.
+ */
 export function createSky(): Mesh {
   const material = new ShaderMaterial({
     uniforms: {
       zenithColor: { value: SKY_ZENITH.clone() },
       horizonColor: { value: SKY_HORIZON.clone() },
+      sunColor: { value: SUN_GLOW.clone() },
+      toSun: { value: TO_SUN },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDirection;
@@ -39,10 +56,16 @@ export function createSky(): Mesh {
     fragmentShader: /* glsl */ `
       uniform vec3 zenithColor;
       uniform vec3 horizonColor;
+      uniform vec3 sunColor;
+      uniform vec3 toSun;
       varying vec3 vDirection;
       void main() {
-        float t = pow(clamp(vDirection.y, 0.0, 1.0), 0.6);
-        gl_FragColor = vec4(mix(horizonColor, zenithColor, t), 1.0);
+        vec3 direction = normalize(vDirection);
+        float t = pow(clamp(direction.y, 0.0, 1.0), 0.55);
+        vec3 color = mix(horizonColor, zenithColor, t);
+        float facing = max(dot(direction, toSun), 0.0);
+        color += sunColor * (pow(facing, 12.0) * 0.35 + pow(facing, 600.0) * 1.6);
+        gl_FragColor = vec4(color, 1.0);
         #include <colorspace_fragment>
       }`,
     side: BackSide,
@@ -60,10 +83,78 @@ export function createFog(): Fog {
   return new Fog(SKY_HORIZON.clone(), 40, 140);
 }
 
-/** Soft sky/ground fill light. */
+/** Soft sky/ground fill light: cool from above, warm earth bouncing from below. */
 export function createAmbientLight(): HemisphereLight {
-  return new HemisphereLight(0xd7f0ff, 0x5b7a3a, DAY_AMBIENT);
+  return new HemisphereLight(0xd4ecff, 0x6b5a34, DAY_AMBIENT);
 }
+
+/** Slow drifting clouds: puffy low-poly heaps high over the island, one draw call. */
+export class Clouds {
+  readonly mesh: InstancedMesh;
+  private readonly spots: { x: number; z: number; y: number; scale: number; turn: number }[] = [];
+  private readonly matrix = new Matrix4();
+  private readonly position = new Vector3();
+  private readonly rotation = new Quaternion();
+  private readonly size = new Vector3();
+
+  constructor(count = 22) {
+    const puff = (r: number, x: number, y: number, z: number) =>
+      new IcosahedronGeometry(r, 0).scale(1, 0.6, 1).translate(x, y, z);
+    const parts = [
+      puff(10, 0, 0, 0),
+      puff(8, 9, -1, 2),
+      puff(7, -9, -1.5, -1),
+      puff(6, 3, 3, -4),
+      puff(5, -4, 2.5, 4),
+    ];
+    const geometry = mergeGeometries(parts);
+    for (const part of parts) part.dispose();
+    this.mesh = new InstancedMesh(
+      geometry,
+      new MeshLambertMaterial({
+        color: 0xffffff,
+        emissive: 0x9aa6b0,
+        flatShading: true,
+        fog: false,
+      }),
+      count,
+    );
+    this.mesh.name = 'clouds';
+    this.mesh.frustumCulled = false;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + Math.sin(i * 7.3) * 0.4;
+      const reach = 120 + ((i * 97) % 11) * 22;
+      this.spots.push({
+        x: Math.cos(angle) * reach,
+        z: Math.sin(angle) * reach,
+        y: 95 + ((i * 53) % 7) * 9,
+        scale: 0.9 + ((i * 31) % 5) * 0.25,
+        turn: i * 1.7,
+      });
+    }
+  }
+
+  update(timeSeconds: number, doom: number): void {
+    const drift = timeSeconds * 1.2;
+    this.spots.forEach((spot, index) => {
+      // Drift east, wrapping round the sky.
+      const x = ((spot.x + drift + 450) % 900) - 450;
+      this.position.set(x, spot.y, spot.z);
+      this.rotation.setFromAxisAngle(UP, spot.turn);
+      this.matrix.compose(this.position, this.rotation, this.size.setScalar(spot.scale));
+      this.mesh.setMatrixAt(index, this.matrix);
+    });
+    this.mesh.instanceMatrix.needsUpdate = true;
+    const material = this.mesh.material as MeshLambertMaterial;
+    material.color.copy(WHITE).lerp(DOOM_CLOUD, doom);
+    material.emissive.copy(CLOUD_GLOW).lerp(DOOM_GLOW, doom);
+  }
+}
+
+const UP = new Vector3(0, 1, 0);
+const CLOUD_GLOW = new Color(0x9aa6b0);
+const DOOM_CLOUD = new Color(0x5a2a22);
+const DOOM_GLOW = new Color(0x8a2a10);
 
 /**
  * Turn the day apocalyptic as the meteor nears: `doom` 0 is a clear day, 1 a red sky. A white
@@ -83,6 +174,7 @@ export function setDoom(
     zenith.lerp(WHITE, flash);
     horizon.lerp(WHITE, flash);
   }
+  (uniforms.sunColor.value as Color).copy(SUN_GLOW).lerp(DOOM_SUN_GLOW, doom);
   parts.fog.color.copy(horizon);
   parts.ambient.intensity = DAY_AMBIENT + (DOOM_AMBIENT - DAY_AMBIENT) * doom + 2 * flash;
   parts.sun.light.color.copy(DAY_SUN).lerp(DOOM_SUN, doom);
@@ -95,7 +187,7 @@ export function setDoom(
 export class Sun {
   readonly light: DirectionalLight;
   /** Unit vector pointing from the ground towards the sun. */
-  private readonly toSun = new Vector3(-0.45, 0.85, 0.35).normalize();
+  private readonly toSun = TO_SUN.clone();
   private readonly right = new Vector3();
   private readonly up = new Vector3();
   private readonly snapped = new Vector3();
@@ -103,7 +195,7 @@ export class Sun {
 
   constructor(scene: Scene, quality: QualitySettings) {
     this.mapSize = quality.shadowMapSize;
-    this.light = new DirectionalLight(0xfff1dc, 2.3);
+    this.light = new DirectionalLight(DAY_SUN, 2.4);
     this.light.castShadow = quality.shadows;
     const shadow = this.light.shadow;
     shadow.mapSize.set(this.mapSize, this.mapSize);

@@ -2,6 +2,53 @@
 
 One entry per milestone (BUILD_PROMPT.md §9), newest first.
 
+## M5: Art pass, plus weaker bots, meat, 20-minute rounds and sound (2026-10-04)
+
+M5 is the art pass, and also takes in the changes asked for after M4: the bots were far too strong, bigger dinosaurs were too slow to snowball a lead, eggs looked out of place, rounds were too short, and there was no sound.
+
+### Added
+
+- **A dinosaur for every tier**, built in code as smooth low-poly creatures on a 17-bone skeleton, one draw call each:
+  - Compsognathus (green, striped, with a fuzz of proto-feathers), Velociraptor (feathered arms and tail fan, sickle claws), Dilophosaurus (twin red crests, spotted), Allosaurus (red brow horns, a ridge of scutes, banded) and T-Rex (huge skull, tiny arms, mottled).
+  - Animated in code: breathing and looking around when idle, a walk that becomes a run (body tipped forward, tail held out, bigger strides), jaws that open and snap on a bite, chewing, a half-open grip while carrying, and a roar.
+  - **Evolving** is an event: a roar, a fountain of golden sparks and a ring of light, on top of the camera punch.
+- **Kills are bodies.** A carcass in your jaws is the victim itself, hanging limp across your mouth, and a dropped one lies on its side. It shrinks and reddens as it's eaten.
+- **World-event carcasses are dead plant-eaters**: a Brachiosaurus, Triceratops, Stegosaurus, Ankylosaurus, Parasaurolophus or Diplodocus lying on its side with its ribs showing.
+- **A prehistoric island.**
+  - Tree ferns, conifers and monkey-puzzle trees in the jungle; cycads on the plains; giant horsetails by the river and the shore; ferns; mossy boulders.
+  - The Ashlands: lava streams running down the volcano, basalt columns, charred trees, old skeletons and a smoking crater that spits embers. Skeletons and dead trees by the tar pits too.
+  - A pterosaur flock wheeling over the island, drifting clouds, a sun with a glow, warmer light and a humid haze.
+  - Water that's turquoise in the shallows and deep blue further out, with surf along the shore and waves.
+  - Plants between the camera and your dinosaur dissolve, so they never hide it.
+- **Meat instead of eggs**, in three sizes: scraps (1), cuts (3) and haunches (8).
+- **Particles**: gore when something is caught or eaten, dust behind sprinters, steam and embers from the vents, and fire and ash at the meteor's impact, with a ring of light racing across the island.
+- **Bloom** on the high preset (with multisampling), so lava, sparks, the sun and the meteor glow.
+- **Sound**, all synthesised in the browser:
+  - A meaty chomp for every bite of food (a thump, crunchy bone and a wet squelch, deeper for bigger mouthfuls), teeth snapping, a heavy crunch for a kill, footsteps that get heavier as you grow, roars from a Compy's screech to a T-Rex's bellow, a horn for world events, vents blasting, the meteor's rumble and impact, and wind and birdsong.
+  - M turns it off and on (remembered).
+- **A "Hold E to eat this carcass" prompt** whenever a carcass is in reach.
+- **Tests.** 145 unit tests (meat sizes and the danger zones' share, meat eaten with a full mouth, eating a big carcass from on top, a body's mass on its carcass, the new speed curve, 20-minute rounds, bots that won't sprint after prey, stop hunting once big and shy away from the danger zones) and 25 browser tests on desktop and phone.
+- **A performance test**: on the preset the game picks itself (desktop and phone), in a full room, looking over the jungle, the volcano and the plains, the scene stays under 150 draw calls and 500k triangles. `window.__extinct.triangleBreakdown()` lists the heaviest parts.
+
+### Changed
+
+- **Bots are much weaker and less lethal.** They react later (0.35–0.75 s), are clumsier, amble after prey at 85% speed and never sprint after it, give up a chase after 4 s, bite less readily, would mostly rather eat than fight, notice threats late, and stay out of the danger zones. Once a bot passes 250 mass it stops hunting altogether, so no bot runs away with the round.
+- **Bigger dinosaurs are a little faster** instead of slower: speed grows from 9 at 10 mass to about 12 for a T-Rex (it was 4.5). Small dinosaurs still turn tighter.
+- **Rounds last 20 minutes**, with the meteor warning for the last two.
+- **Danger zones hold the richest food**: a share of the meat always lies there, mostly cuts and haunches, worth ×5 in the Ashlands and ×4 by the tar pits, with a golden glow. A haunch on the volcano is worth 40 scraps. It's slower to come back, and the rest of the island's meat never lands there.
+- **Food is eaten on contact even with a carcass in your mouth.** It used to be ignored, which made meat drops seem uneatable.
+- A big carcass can be eaten from on top of it, not only from its edge, and kill carcasses are easier to reach (the body lies stretched out).
+- World events come every 35–60 s (up to four at once) and grow up to 3× by the meteor; event meat lasts 60 s.
+- Critters flee a little slower and notice you later.
+- Browser tests play on the medium preset by default (bloom makes software rendering several times slower); the smoke and performance tests use the preset the game picks.
+
+### Known issues
+
+- Bites still aren't lag-compensated online.
+- The models are procedural, not the rigged GLB models the brief imagined; the asset sites are unreachable from cloud sessions. They can be swapped in later behind the same `DinoView` interface.
+- The brief's Howler.js isn't used: the sounds are synthesised with the browser's own Web Audio API, so there's nothing to download or license.
+- E still eats, so the M6 abilities need another key.
+
 ## M4: Round loop, plus bites, carcasses, events and danger zones (2026-10-04)
 
 M4 also changes the core rules, as asked after M3: progression felt slow and stale.

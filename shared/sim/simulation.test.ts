@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FOOD, MASS, MEAT, NETWORK, ROOM, ROUND, VENTS, WORLD } from '../config.ts';
+import { MASS, MEAT, NETWORK, ROOM, ROUND, SCRAPS, VENTS, WORLD } from '../config.ts';
 import type { PlayerInput } from '../movement.ts';
 import { VOLCANO, VOLCANO_VENTS } from '../world/layout.ts';
 import type { Dino } from './entities.ts';
@@ -59,7 +59,7 @@ describe('bots-only simulation', () => {
       if (tick % NETWORK.tickRate === 0) {
         // Once a simulated second, check that the world still makes sense.
         for (const dino of world.dinos.values()) checkDino(dino);
-        expect(world.eggs).toHaveLength(FOOD.eggCount);
+        expect(world.scraps).toHaveLength(SCRAPS.count);
         expect(world.meat.size).toBeLessThanOrEqual(MEAT.maxChunks);
         for (const critter of world.critters) {
           expect(Math.hypot(critter.x, critter.z)).toBeLessThanOrEqual(
@@ -74,7 +74,7 @@ describe('bots-only simulation', () => {
     for (const dino of world.dinos.values()) checkDino(dino);
     // Bots ate, hunted, bit, carried and ate carcasses, and grew; events came and the vents kept
     // erupting until the meteor froze everything.
-    expect(world.stats.eggsEaten).toBeGreaterThan(200);
+    expect(world.stats.scrapsEaten).toBeGreaterThan(200);
     expect(killed).toBe(world.stats.dinosKilled);
     expect(killed).toBeGreaterThan(3);
     expect(world.stats.carcassesEaten).toBeGreaterThan(2);

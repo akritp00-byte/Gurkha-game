@@ -3,24 +3,25 @@ import { type InputHandle, Predict, type Reconciler } from '@colyseus/sdk';
 import {
   CARCASS_KIND_CODES,
   CRITTERS,
-  type EggSlot,
-  FOOD,
   fromWireInput,
   HAPPENING_KIND_CODES,
+  meatSizeOf,
   MESSAGE,
   type NetCarcass,
   type NetCritter,
   type NetDino,
-  type NetEgg,
   type NetEvent,
   type NetHappening,
   type NetMeat,
   type NetRound,
+  type NetScrap,
   type NetStanding,
   NETWORK,
   type PlayerInput,
   type RoundSettings,
   roundPhase,
+  SCRAPS,
+  type ScrapSlot,
   stepLocomotion,
   type TestCommand,
   toWireInput,
@@ -46,7 +47,7 @@ import type {
 export type RoomState = Schema & {
   readonly tick: number;
   readonly dinos: MapSchema<NetDino>;
-  readonly eggs: MapSchema<NetEgg>;
+  readonly scraps: MapSchema<NetScrap>;
   readonly meat: MapSchema<NetMeat>;
   readonly critters: MapSchema<NetCritter>;
   readonly carcasses: MapSchema<NetCarcass>;
@@ -103,9 +104,11 @@ function standing(source: NetStanding): SessionStanding {
 export class OnlineSession implements Session {
   readonly mode = 'online';
   readonly dinos = new Map<number, MirrorDino>();
-  readonly eggs: EggSlot[] = Array.from({ length: FOOD.eggCount }, () => ({
+  readonly scraps: ScrapSlot[] = Array.from({ length: SCRAPS.count }, () => ({
     x: 0,
     z: 0,
+    size: 0,
+    rich: false,
     alive: false,
     respawnIn: 0,
   }));
@@ -142,7 +145,7 @@ export class OnlineSession implements Session {
   private readonly dinoSources = new Map<number, NetDino>();
   private readonly critterSources: (NetCritter | undefined)[] = [];
   private readonly queued: SessionEvent[] = [];
-  private readonly eggSeen = new Uint32Array(FOOD.eggCount);
+  private readonly scrapSeen = new Uint32Array(SCRAPS.count);
   private frame = 0;
   private tickArrivedAt = 0;
   /** A click waits here until an input goes out with it. */
@@ -307,23 +310,24 @@ export class OnlineSession implements Session {
     const frame = ++this.frame;
     this.mirrorDinos();
 
-    this.state.eggs.forEach((source, key) => {
+    this.state.scraps.forEach((source, key) => {
       const slot = Number(key);
-      const egg = this.eggs[slot] as EggSlot | undefined;
-      if (!egg) return;
-      this.eggSeen[slot] = frame;
-      const moved = egg.x !== source.x || egg.z !== source.z;
-      if (source.alive && (!egg.alive || moved)) this.queued.push({ type: 'eggSpawned', slot });
-      if (!source.alive && egg.alive) this.queued.push({ type: 'eggEaten', slot });
-      egg.x = source.x;
-      egg.z = source.z;
-      egg.alive = source.alive;
+      const scrap = this.scraps[slot] as ScrapSlot | undefined;
+      if (!scrap) return;
+      this.scrapSeen[slot] = frame;
+      const moved = scrap.x !== source.x || scrap.z !== source.z;
+      if (source.alive && (!scrap.alive || moved)) this.queued.push({ type: 'scrapSpawned', slot });
+      if (!source.alive && scrap.alive) this.queued.push({ type: 'scrapEaten', slot });
+      scrap.x = source.x;
+      scrap.z = source.z;
+      scrap.size = meatSizeOf(source.size);
+      scrap.alive = source.alive;
     });
-    // Eggs that went out of view.
-    this.eggs.forEach((egg, slot) => {
-      if (this.eggSeen[slot] === frame || !egg.alive) return;
-      egg.alive = false;
-      this.queued.push({ type: 'eggEaten', slot });
+    // Scraps that went out of view.
+    this.scraps.forEach((scrap, slot) => {
+      if (this.scrapSeen[slot] === frame || !scrap.alive) return;
+      scrap.alive = false;
+      this.queued.push({ type: 'scrapEaten', slot });
     });
 
     const tickTime = this.time * NETWORK.tickRate;
@@ -334,7 +338,7 @@ export class OnlineSession implements Session {
       const age = Math.max(0, (tickTime - source.born) / NETWORK.tickRate);
       const chunk = this.meat.get(id);
       if (chunk) chunk.age = age;
-      else this.meat.set(id, { id, x: source.x, z: source.z, age });
+      else this.meat.set(id, { id, x: source.x, z: source.z, size: meatSizeOf(source.size), age });
     });
     for (const id of this.meat.keys()) if (!seenMeat.has(id)) this.meat.delete(id);
 
@@ -442,6 +446,8 @@ export class OnlineSession implements Session {
           size: source.size,
           radius: source.radius,
           kind: CARCASS_KIND_CODES[source.kind] ?? 'kill',
+          bodyMass: source.bodyMass,
+          variant: source.variant,
           carrierId: null,
         };
         this.carcasses.set(id, carcass);
