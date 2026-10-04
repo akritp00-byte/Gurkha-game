@@ -655,6 +655,38 @@ describe('abilities', () => {
     );
   });
 
+  it('a charge tosses each victim to its own side, never straight ahead to be run over', () => {
+    const world = emptyWorld();
+    const charger = world.addPlayer('Charger');
+    const onLeft = world.addPlayer('Left');
+    const onRight = world.addPlayer('Right');
+    world.setMass(charger, 600);
+    world.setMass(onLeft, 120);
+    world.setMass(onRight, 120);
+    // Heading 0 faces +z, so the charger's left is +x. Both victims are almost dead ahead.
+    place(charger, 60, -10, 0);
+    place(onLeft, 60.4, 0);
+    place(onRight, 59.6, 0);
+
+    const events = stepUntil(
+      world,
+      ABILITIES.charge.seconds,
+      (e) => e.type === 'shoved',
+      pressing(charger, Q),
+    );
+
+    expect(events.filter((e) => e.type === 'shoved')).toHaveLength(2);
+    for (const [victim, side] of [
+      [onLeft, 1],
+      [onRight, -1],
+    ] as const) {
+      expect(Math.sign(victim.pushX)).toBe(side);
+      // Mostly sideways, a little forward.
+      expect(Math.abs(victim.pushX)).toBeGreaterThan(victim.pushZ);
+      expect(victim.pushZ).toBeGreaterThan(0);
+    }
+  });
+
   it("doesn't touch spawn-protected dinosaurs", () => {
     const world = emptyWorld();
     const rex = world.addPlayer('Rex');

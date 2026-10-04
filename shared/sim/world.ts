@@ -578,13 +578,15 @@ export class GameWorld implements WorldSenses {
           this.chargedInto.set(charger.id, hit);
         }
         hit.add(target.id);
-        // Thrown aside and ahead, whichever side of the charger it was on.
-        const dx = target.x - charger.x;
-        const dz = target.z - charger.z;
-        const distance = Math.hypot(dx, dz);
-        const awayX = (distance > 1e-6 ? dx / distance : 0) + Math.sin(charger.heading) * 0.6;
-        const awayZ = (distance > 1e-6 ? dz / distance : 0) + Math.cos(charger.heading) * 0.6;
-        const length = Math.hypot(awayX, awayZ) || 1;
+        // Tossed aside to whichever side of the charger it was on (left if dead ahead), and a
+        // little forward. Never straight ahead, where the faster charger would run it over.
+        const forwardX = Math.sin(charger.heading);
+        const forwardZ = Math.cos(charger.heading);
+        const left = (target.x - charger.x) * forwardZ - (target.z - charger.z) * forwardX;
+        const side = left >= 0 ? 1 : -1;
+        const awayX = side * forwardZ + forwardX * ABILITIES.charge.throwAhead;
+        const awayZ = -side * forwardX + forwardZ * ABILITIES.charge.throwAhead;
+        const length = Math.hypot(awayX, awayZ);
         target.pushX += (awayX / length) * ABILITIES.charge.knockback;
         target.pushZ += (awayZ / length) * ABILITIES.charge.knockback;
         this.letGo(target);

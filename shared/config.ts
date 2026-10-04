@@ -403,6 +403,8 @@ export const ABILITIES = {
   /**
    * Allosaurus: a charge, fast and hard to steer, that knocks smaller dinosaurs it touches
    * aside (and loose of whatever they carry). `reach` is extra body scales round the charger.
+   * A victim is tossed at `knockback` towards its own side of the charger, angled forward by
+   * `throwAhead` (forward per unit sideways), so the charger never runs over it.
    */
   charge: {
     cooldownSeconds: 10,
@@ -410,6 +412,7 @@ export const ABILITIES = {
     speedMultiplier: 1.8,
     turnMultiplier: 0.35,
     knockback: 16,
+    throwAhead: 0.6,
     reach: 0.35,
   },
   /**

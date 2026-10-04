@@ -24,6 +24,10 @@ One entry per milestone (BUILD_PROMPT.md §9), newest first.
 - The test hook `placeDinoAhead` takes a behaviour: `'still'`, or `'hunt'` for a bot that goes straight for the player.
 - PC is the target from now on: touch controls still work, but phones get no new features.
 
+### Fixed
+
+- A charge tosses each dinosaur it hits aside, to whichever side of the charger it was on. One dead ahead used to be thrown straight ahead, slower than the charger, which then ran over it.
+
 ## M5: Art pass, plus weaker bots, meat, 20-minute rounds and sound (2026-10-04)
 
 M5 is the art pass, and also takes in the changes asked for after M4: the bots were far too strong, bigger dinosaurs were too slow to snowball a lead, eggs looked out of place, rounds were too short, and there was no sound.
