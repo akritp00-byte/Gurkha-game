@@ -1,4 +1,15 @@
-import { BITE, CARCASS, MOVEMENT, PUSH, SPRINT, STAMINA, WORLD } from './config.ts';
+import {
+  ABILITIES,
+  type AbilityId,
+  BITE,
+  CARCASS,
+  MOVEMENT,
+  PUSH,
+  SPRINT,
+  STAMINA,
+  WORLD,
+} from './config.ts';
+import { tierForMass } from './tiers.ts';
 import { clamp } from './math.ts';
 import { VOLCANO } from './world/layout.ts';
 import { terrainSpeedFactor } from './world/terrain.ts';
@@ -36,6 +47,8 @@ export interface PlayerInput extends MoveInput {
   readonly bite: boolean;
   /** Held: eat the carcass in your mouth, or one on the ground in front of you. */
   readonly eat: boolean;
+  /** Use your tier's ability this tick (one press, Q): pounce, spit, charge or roar. */
+  readonly ability: boolean;
 }
 
 export const IDLE_INPUT: PlayerInput = {
@@ -44,6 +57,7 @@ export const IDLE_INPUT: PlayerInput = {
   sprint: false,
   bite: false,
   eat: false,
+  ability: false,
 };
 
 /** What a movement step needs to know beyond the dinosaur's own motion. */
@@ -53,6 +67,9 @@ export interface StepConditions {
   readonly terrainFactor: number;
   /** Top-speed multiplier for carrying a carcass and eating (`loadFactor`), 1 for neither. */
   readonly loadFactor: number;
+  /** Top-speed and turning multipliers from a charge (1 when not charging). */
+  readonly boost?: number;
+  readonly turnFactor?: number;
 }
 
 /** A sprint bar: 0 to 1, refilling after a pause; run it dry and you're winded for a while. */
@@ -85,6 +102,14 @@ export interface Locomotion {
   readonly mass: number;
   /** Has a carcass in its mouth. */
   readonly carrying: boolean;
+  /** Seconds until the ability can be used again. */
+  abilityCooldown: number;
+  /** Seconds of charge left (an Allosaurus's ability). */
+  chargingFor: number;
+  /** Seconds of being stunned left (by a roar): no moving, biting or eating. */
+  stunnedFor: number;
+  /** The ability used this tick, if any, for the world to act on. */
+  abilityUsed: AbilityId | null;
 }
 
 /** Pushes slower than this stop instead of fading forever. */
@@ -147,7 +172,29 @@ export function loadFactor(carrying: boolean, eating: boolean): number {
  * same thing to predict its own dinosaur.
  */
 export function stepLocomotion(body: Locomotion, input: PlayerInput, dt: number): void {
-  const { turn, throttle, sprint, eat } = sanitizeInput(input);
+  const clean = sanitizeInput(input);
+  let { turn, throttle, sprint } = clean;
+  const stunned = body.stunnedFor > 0;
+  body.stunnedFor = countDown(body.stunnedFor, dt);
+  body.abilityCooldown = countDown(body.abilityCooldown, dt);
+  body.abilityUsed = null;
+  if (stunned) {
+    // Frozen to the spot: the dinosaur slows to a stop whatever is pressed.
+    turn = 0;
+    throttle = 0;
+    sprint = false;
+  } else if (clean.ability && body.abilityCooldown <= 0) {
+    useAbility(body);
+  }
+  let boost = 1;
+  let turnFactor = 1;
+  if (body.chargingFor > 0) {
+    body.chargingFor = countDown(body.chargingFor, dt);
+    throttle = 1;
+    sprint = false;
+    boost = ABILITIES.charge.speedMultiplier;
+    turnFactor = ABILITIES.charge.turnMultiplier;
+  }
   const sprinting = sprint && throttle > 0 && canSprint(body);
   const stamina = stepStamina(body, sprinting, dt);
   const next = stepMotion(
@@ -156,7 +203,9 @@ export function stepLocomotion(body: Locomotion, input: PlayerInput, dt: number)
     {
       mass: body.mass,
       terrainFactor: terrainSpeedFactor(body.x, body.z),
-      loadFactor: loadFactor(body.carrying, eat),
+      loadFactor: loadFactor(body.carrying, clean.eat && !stunned),
+      boost,
+      turnFactor,
     },
     dt,
   );
@@ -170,6 +219,32 @@ export function stepLocomotion(body: Locomotion, input: PlayerInput, dt: number)
   body.winded = stamina.winded;
   body.refillIn = stamina.refillIn;
   body.sprinting = sprinting;
+}
+
+/** Timers within this of zero count as run out, despite floating-point drift. */
+const TIMER_EPSILON = 1e-9;
+
+/** Count a timer down, landing exactly on 0 when it runs out. */
+function countDown(timer: number, dt: number): number {
+  return timer - dt > TIMER_EPSILON ? timer - dt : 0;
+}
+
+/**
+ * Use the ability of the dinosaur's tier, if it has one: a pounce throws it forward and a
+ * charge starts; a spit or a roar only acts on others, which the world sees to through
+ * `abilityUsed`. Either way the cooldown starts.
+ */
+function useAbility(body: Locomotion): void {
+  const ability = tierForMass(body.mass).ability;
+  if (ability === null) return;
+  body.abilityUsed = ability;
+  body.abilityCooldown = ABILITIES[ability].cooldownSeconds;
+  if (ability === 'pounce') {
+    body.pushX += Math.sin(body.heading) * ABILITIES.pounce.speed;
+    body.pushZ += Math.cos(body.heading) * ABILITIES.pounce.speed;
+  } else if (ability === 'charge') {
+    body.chargingFor = ABILITIES.charge.seconds;
+  }
 }
 
 /** Input from somewhere untrusted, such as the network: any field may hold anything. */
@@ -186,6 +261,7 @@ export function sanitizeInput(input: RawInput): PlayerInput {
     sprint: input.sprint === true,
     bite: input.bite === true,
     eat: input.eat === true,
+    ability: input.ability === true,
   };
 }
 
@@ -205,14 +281,15 @@ export function stepMotion(
 ): Motion {
   const { turn, throttle, sprint } = sanitizeInput(input);
   const { mass, terrainFactor, loadFactor: load } = conditions;
-  const heading = motion.heading + turn * turnRateForMass(mass) * dt;
+  const boost = conditions.boost ?? 1;
+  const heading = motion.heading + turn * turnRateForMass(mass) * (conditions.turnFactor ?? 1) * dt;
 
   const baseSpeed = speedForMass(mass);
   const sprintFactor = sprint ? SPRINT.speedMultiplier : 1;
-  const targetSpeed = throttle * baseSpeed * sprintFactor * terrainFactor * load;
+  const targetSpeed = throttle * baseSpeed * sprintFactor * terrainFactor * load * boost;
   const rampSeconds =
     targetSpeed > motion.speed ? MOVEMENT.accelerationSeconds : MOVEMENT.decelerationSeconds;
-  const maxChange = (baseSpeed * dt) / rampSeconds;
+  const maxChange = (baseSpeed * boost * dt) / rampSeconds;
   const speed = motion.speed + clamp(targetSpeed - motion.speed, -maxChange, maxChange);
 
   const fade = Math.exp(-PUSH.damping * dt);

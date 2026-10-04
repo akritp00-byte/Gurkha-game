@@ -97,7 +97,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     bufferMaxSize: NETWORK.inputBufferSize,
     sanitize: { turn: [-WIRE_INPUT.turn, WIRE_INPUT.turn], throttle: [0, WIRE_INPUT.throttle] },
     // No input this tick (a late packet): keep steering and eating for a moment, but never
-    // repeat a bite. A player who has dropped, or stopped sending (a hidden tab), stands still.
+    // repeat a bite or an ability. A player who has dropped, or stopped sending (a hidden tab), stands still.
     idle: ({ latest, sessionId }) => {
       const player = this.players.get(sessionId);
       const late = player?.connected === true && player.missedInputs < NETWORK.inputGraceTicks;
@@ -319,6 +319,10 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     state.refillIn = f32(dino.refillIn);
     state.carrying = dino.carrying;
     state.eating = dino.eating;
+    state.abilityCooldown = f32(dino.abilityCooldown);
+    state.chargingFor = f32(dino.chargingFor);
+    state.stunnedFor = f32(dino.stunnedFor);
+    state.blurredFor = f32(dino.blurredFor);
   }
 
   private syncScraps(): void {
@@ -553,6 +557,21 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
           case 'dinoSpawned':
             if (this.sees(player, event.dinoId)) {
               own.push({ type: 'dinoSpawned', dinoId: event.dinoId });
+            }
+            break;
+          case 'ability':
+            if (this.sees(player, event.dinoId)) {
+              own.push({ type: 'ability', dinoId: event.dinoId, ability: event.ability });
+            }
+            break;
+          case 'spat':
+            if (event.targetId === player.dino.id || this.sees(player, event.targetId)) {
+              own.push({ type: 'spat', targetId: event.targetId, byId: event.byId });
+            }
+            break;
+          case 'stunned':
+            if (event.dinoId === player.dino.id || this.sees(player, event.dinoId)) {
+              own.push({ type: 'stunned', dinoId: event.dinoId, byId: event.byId });
             }
             break;
           case 'tierChanged':

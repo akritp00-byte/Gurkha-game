@@ -11,18 +11,29 @@ import {
 } from './net.ts';
 
 describe('wire inputs', () => {
-  const wire: WireInput = { turn: 0, throttle: 0, sprint: false, bite: false, eat: false };
+  const wire: WireInput = {
+    turn: 0,
+    throttle: 0,
+    sprint: false,
+    bite: false,
+    eat: false,
+    ability: false,
+  };
 
   it('make "not turning" and "standing still" exact', () => {
     expect(fromWireInput(toWireInput(IDLE_INPUT, wire))).toEqual(IDLE_INPUT);
     expect(
-      toWireInput({ turn: 1, throttle: 1, sprint: true, bite: true, eat: true }, wire),
+      toWireInput(
+        { turn: 1, throttle: 1, sprint: true, bite: true, eat: true, ability: true },
+        wire,
+      ),
     ).toEqual({
       turn: WIRE_INPUT.turn,
       throttle: WIRE_INPUT.throttle,
       sprint: true,
       bite: true,
       eat: true,
+      ability: true,
     });
     expect(fromWireInput(wire)).toEqual({
       turn: 1,
@@ -30,6 +41,7 @@ describe('wire inputs', () => {
       sprint: true,
       bite: true,
       eat: true,
+      ability: true,
     });
   });
 

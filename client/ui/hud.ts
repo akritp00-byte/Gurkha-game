@@ -14,7 +14,17 @@ function element<K extends keyof HTMLElementTagNameMap>(
 /** A short note about what's happening to you, shown above the HUD card. */
 export interface StatusChip {
   readonly kind:
-    'protected' | 'hidden' | 'sprinting' | 'slowed' | 'tired' | 'carrying' | 'eating' | 'danger';
+    | 'protected'
+    | 'hidden'
+    | 'sprinting'
+    | 'slowed'
+    | 'tired'
+    | 'carrying'
+    | 'eating'
+    | 'danger'
+    | 'stunned'
+    | 'blurred'
+    | 'charging';
   readonly text: string;
 }
 
@@ -27,12 +37,15 @@ export class Hud {
   private readonly status: HTMLElement;
   private readonly stamina: HTMLElement;
   private readonly staminaFill: HTMLElement;
+  /** The card itself, for things that sit beside it (the ability tile). */
+  readonly card: HTMLElement;
   private shownMass = Number.NaN;
   private shownStatus = '';
   private shownStamina = '';
 
   constructor(parent: HTMLElement) {
     const card = element('section', 'hud', parent);
+    this.card = card;
     card.setAttribute('aria-label', 'Your dinosaur');
     card.dataset.testid = 'hud';
     this.status = element('ul', 'hud-status', card);

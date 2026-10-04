@@ -1,4 +1,5 @@
 import {
+  type AbilityId,
   attackZone,
   bodyRadius,
   CAMERA,
@@ -27,6 +28,8 @@ import {
   VOLCANO,
   VOLCANO_VENTS,
   warningProgress,
+  roarRadius,
+  spitRange,
   WORLD,
   zoneTouches,
 } from '@extinct/shared';
@@ -70,6 +73,7 @@ import { Pterosaurs } from '../render/pterosaurs.ts';
 import { ThreatRings } from '../render/threatRings.ts';
 import { createVegetation, SEE_THROUGH } from '../render/vegetation.ts';
 import { VentsView } from '../render/vents.ts';
+import { AbilityPanel } from '../ui/abilityPanel.ts';
 import { Banner } from '../ui/banner.ts';
 import { DeathScreen } from '../ui/deathScreen.ts';
 import { DebugOverlay, type ServerStatus } from '../ui/debugOverlay.ts';
@@ -106,6 +110,9 @@ const FOOTSTEP_SPACING = 1.1;
 const BIG_FOOTSTEPS_SCALE = 2.6;
 /** Sprinting kicks up a puff of dust this often. */
 const DUST_EVERY_MS = 70;
+/** Spit blurs the view by this many pixels, fading over its last this-many seconds. */
+const BLUR_PIXELS = 7;
+const BLUR_FADE_SECONDS = 0.6;
 /** The volcano puffs out smoke this often (twice as often by the meteor). */
 const SMOKE_EVERY_MS = 160;
 
@@ -138,6 +145,12 @@ export interface DebugState {
   /** Place on the leaderboard, 0 while dead. */
   rank: number;
   hidden: boolean;
+  /** The tier's ability (null for a hatchling), seconds before it's ready, and its effects. */
+  ability: AbilityId | null;
+  abilityCooldown: number;
+  chargingFor: number;
+  stunnedFor: number;
+  blurredFor: number;
   /** Name of whoever caught the player last, if anyone. */
   eatenBy: string | null;
   scrapsAlive: number;
@@ -166,6 +179,8 @@ export interface OtherDino {
   z: number;
   mass: number;
   alive: boolean;
+  stunnedFor: number;
+  blurredFor: number;
 }
 
 /**
@@ -257,6 +272,11 @@ export class Game {
   private readonly podium: Podium;
   private readonly banner: Banner;
   private readonly impactFlash: HTMLElement;
+  private readonly abilityPanel: AbilityPanel;
+  private readonly splat: HTMLElement;
+  /** Whether the player was carrying last frame, and the round phase, to notice changes. */
+  private wasCarrying = false;
+  private lastPhase = '';
 
   private readonly poses = new Map<number, PoseSample>();
   private input: PlayerInput = IDLE_INPUT;
@@ -273,6 +293,7 @@ export class Game {
   private impactAt = Number.NEGATIVE_INFINITY;
   private readonly grip: { mouth: Vector3; heading: number } = { mouth: new Vector3(), heading: 0 };
   private readonly mouthAt = new Vector3();
+  private readonly spitAt = new Vector3();
   private lastFrameMs: number | undefined;
   /** The picture freezes until this time (ms) after you eat a dinosaur. */
   private hitstopUntil = 0;
@@ -357,7 +378,11 @@ export class Game {
     this.podium = new Podium(ui);
     this.impactFlash = document.createElement('div');
     this.impactFlash.className = 'impact-flash';
-    ui.append(this.impactFlash);
+    this.splat = document.createElement('div');
+    this.splat.className = 'spit-splat';
+    this.splat.dataset.testid = 'spit-splat';
+    ui.append(this.impactFlash, this.splat);
+    this.abilityPanel = new AbilityPanel(this.hud.card);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('resize', this.resize);
     this.resize();
@@ -428,9 +453,27 @@ export class Game {
         case 'dinoSpawned': {
           const dino = this.session.dinos.get(event.dinoId);
           this.crowd.find(event.dinoId)?.snap(dino?.mass ?? MASS.start);
-          if (event.dinoId === player?.id) this.deathScreen.hide();
+          if (event.dinoId === player?.id) {
+            this.deathScreen.hide();
+            this.sound.hatch();
+          }
           break;
         }
+        case 'ability':
+          this.abilityUsed(event.dinoId, event.ability, events);
+          break;
+        case 'spat': {
+          const target = this.poses.get(event.targetId);
+          if (target) this.sound.splat(target);
+          if (event.targetId === player?.id) this.cameraRig.punch(CAMERA.shovePunch * 0.5);
+          break;
+        }
+        case 'stunned':
+          if (event.dinoId === player?.id) {
+            this.sound.stunned();
+            this.cameraRig.shake(EFFECTS.roarShake);
+          }
+          break;
         case 'tierChanged':
           if (event.dinoId === player?.id && event.tier > event.previousTier) {
             this.cameraRig.punch(CAMERA.evolvePunch);
@@ -468,6 +511,7 @@ export class Game {
           break;
         case 'meteorWarning':
           this.banner.show(timeMs, 'The meteor is coming! Be the biggest when it hits.', 'meteor');
+          this.sound.meteorWarning();
           break;
         case 'meteorImpact':
           this.placeAtImpact = player?.alive ? player.rank : 0;
@@ -482,7 +526,73 @@ export class Game {
           this.deathScreen.hide();
           this.killFeed.clear();
           this.banner.show(timeMs, `Round ${event.round}: eat, grow, survive the meteor`, 'round');
+          this.sound.roundStart();
           break;
+      }
+    }
+  }
+
+  /** A dinosaur used its ability: show it and play it. */
+  private abilityUsed(dinoId: number, ability: AbilityId, events: readonly SessionEvent[]): void {
+    const dino = this.session.dinos.get(dinoId);
+    const view = this.crowd.find(dinoId);
+    const pose = this.poses.get(dinoId);
+    if (!dino || !view || !pose) return;
+    const isPlayer = dinoId === this.session.player?.id;
+    const scale = view.bodyScale;
+    const ground = heightAt(this.field, pose.x, pose.z);
+    switch (ability) {
+      case 'pounce':
+        view.leap();
+        this.effects.burst('dust', { x: pose.x, y: ground + 0.1, z: pose.z }, 8, {
+          speed: 3 * scale,
+          size: 0.35 * scale,
+          life: 0.8,
+          color: 0xc8b48a,
+          lift: 0.3,
+        });
+        this.sound.pounce(pose);
+        if (isPlayer) this.cameraRig.punch(CAMERA.bitePunch);
+        break;
+      case 'spit': {
+        view.bite();
+        view.mouth(this.mouthAt);
+        // Towards whoever it hit, or straight ahead if it missed.
+        const hit = events.find((event) => event.type === 'spat' && event.byId === dinoId);
+        const target = hit?.type === 'spat' ? this.poses.get(hit.targetId) : undefined;
+        const range = spitRange(dino.mass);
+        const to = target
+          ? this.spitAt.set(
+              target.x,
+              heightAt(this.field, target.x, target.z) + 0.6 * scale,
+              target.z,
+            )
+          : this.spitAt.set(
+              pose.x + Math.sin(pose.heading) * range,
+              ground,
+              pose.z + Math.cos(pose.heading) * range,
+            );
+        this.effects.spit(this.mouthAt, to, 0.22 * scale);
+        this.sound.spit(pose);
+        break;
+      }
+      case 'charge':
+        this.sound.charge(pose);
+        if (isPlayer) this.cameraRig.shake(EFFECTS.chargeShake);
+        break;
+      case 'roar': {
+        view.roar();
+        const at = { x: pose.x, y: ground + 0.2, z: pose.z };
+        const radius = roarRadius(dino.mass);
+        this.effects.ring(at, radius, 0.9, 0xffb050);
+        this.effects.ring(at, radius * 0.6, 0.6, 0xfff0c8);
+        this.sound.roar(tierForMass(dino.mass).tier, false, pose);
+        const player = this.session.player;
+        if (player?.alive) {
+          const distance = Math.hypot(player.x - pose.x, player.z - pose.z);
+          if (distance < radius * 1.5) this.cameraRig.shake(EFFECTS.roarShake);
+        }
+        break;
       }
     }
   }
@@ -594,7 +704,21 @@ export class Game {
       if (!visible) continue;
       view.setGlow(dino.protectedFor > 0 ? pulse : 0);
       const pose = this.poses.get(dino.id) ?? dino;
-      view.update(dt, { ...pose, mass: dino.mass, carrying: dino.carrying }, this.field);
+      view.update(
+        dt,
+        {
+          ...pose,
+          mass: dino.mass,
+          carrying: dino.carrying,
+          stunned: dino.stunnedFor > 0,
+          charging: dino.chargingFor > 0,
+        },
+        this.field,
+      );
+      if (dino.stunnedFor > 0) {
+        const head = heightAt(this.field, pose.x, pose.z) + view.bodyScale * 0.95;
+        this.effects.stars({ x: pose.x, y: head, z: pose.z }, view.bodyScale, time);
+      }
       if (dino.eating) this.chew(dino.id, timeMs);
       this.feel(dino, pose, view, dt, timeMs, dino === player);
       if (dino !== player) {
@@ -692,10 +816,20 @@ export class Game {
     if (walked > FOOTSTEP_SPACING * scale) {
       this.strides.set(dino.id, 0);
       if (isPlayer || scale > BIG_FOOTSTEPS_SCALE) this.sound.footstep(scale, pose);
+      // The ground shakes under a giant's feet.
+      const player = this.session.player;
+      if (!isPlayer && scale > BIG_FOOTSTEPS_SCALE && player?.alive) {
+        const distance = Math.hypot(player.x - pose.x, player.z - pose.z);
+        const near = 1 - distance / EFFECTS.footstepShakeDistance;
+        if (near > 0) this.cameraRig.shake(EFFECTS.footstepShake * near * Math.min(scale / 10, 1));
+      }
     } else {
       this.strides.set(dino.id, walked);
     }
-    if (dino.sprinting && timeMs - (this.dustAt.get(dino.id) ?? 0) > DUST_EVERY_MS) {
+    if (
+      (dino.sprinting || dino.chargingFor > 0) &&
+      timeMs - (this.dustAt.get(dino.id) ?? 0) > DUST_EVERY_MS
+    ) {
       this.dustAt.set(dino.id, timeMs);
       this.effects.burst('dust', { x: pose.x, y: ground + 0.1 * scale, z: pose.z }, 2, {
         speed: 1.2 * scale,
@@ -842,6 +976,13 @@ export class Game {
     this.hud.update(player.mass);
     this.hud.setStamina(player.stamina, player.winded);
     this.hud.setStatus(this.statusChips(player));
+    this.abilityPanel.update(tierForMass(player.mass).ability, player.abilityCooldown);
+    // Spat in the eyes: the world goes blurry and green, clearing as it wears off.
+    const blur = player.alive ? Math.min(player.blurredFor / BLUR_FADE_SECONDS, 1) : 0;
+    this.canvas.style.filter = blur > 0 ? `blur(${(blur * BLUR_PIXELS).toFixed(1)}px)` : '';
+    this.splat.style.opacity = blur.toFixed(2);
+    if (player.carrying && !this.wasCarrying && player.alive) this.sound.grab();
+    this.wasCarrying = player.carrying;
     this.killFeed.update(timeMs);
     if (!player.alive && round.phase === 'playing') this.deathScreen.update(player.respawnIn);
     this.hint.update(timeMs, this.controls.used);
@@ -855,6 +996,9 @@ export class Game {
       happenings: this.session.happenings,
       leaders: this.session.leaderboard,
     });
+    if (round.phase === 'podium' && this.lastPhase !== 'podium')
+      this.sound.podium(this.placeAtImpact);
+    this.lastPhase = round.phase;
     if (round.phase === 'podium') {
       if (!this.podium.visible) this.podium.show(round.podium, player.id, this.placeAtImpact);
       this.podium.update(timeToNextRound(round.clock, round.settings));
@@ -910,6 +1054,9 @@ export class Game {
         text: this.touchFirst ? 'Hold Eat to eat this carcass' : 'Hold E to eat this carcass',
       });
     }
+    if (player.stunnedFor > 0) chips.push({ kind: 'stunned', text: 'Stunned!' });
+    if (player.blurredFor > 0) chips.push({ kind: 'blurred', text: 'Spat in the eyes!' });
+    if (player.chargingFor > 0) chips.push({ kind: 'charging', text: 'Charging!' });
     const zone = dangerZoneAt(player.x, player.z);
     if (zone !== null) {
       const name = DANGER_ZONE_NAMES[zone];
@@ -1039,6 +1186,11 @@ export class Game {
           eating: player?.eating ?? false,
           rank: player?.rank ?? 0,
           hidden: player ? isHiddenInFerns(player) : false,
+          ability: player ? tierForMass(player.mass).ability : null,
+          abilityCooldown: player?.abilityCooldown ?? 0,
+          chargingFor: player?.chargingFor ?? 0,
+          stunnedFor: player?.stunnedFor ?? 0,
+          blurredFor: player?.blurredFor ?? 0,
           eatenBy: eater?.name ?? null,
           scrapsAlive: this.scrapsAlive(),
           meat: session.meat.size,
@@ -1083,6 +1235,8 @@ export class Game {
             z: dino.z,
             mass: dino.mass,
             alive: dino.alive,
+            stunnedFor: dino.stunnedFor,
+            blurredFor: dino.blurredFor,
           })),
       bots: () => session.test.bots?.() ?? [],
       setMass: (mass) => {

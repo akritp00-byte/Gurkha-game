@@ -347,7 +347,246 @@ export class SoundBoard {
     }
   }
 
-  /** Something big knocked you aside. */
+  /** A pounce: a quick whoosh and a scrabble of claws. */
+  pounce(at?: Place): void {
+    const voice = this.voice(0.6, at);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    this.noiseHit(context, out, now, {
+      type: 'bandpass',
+      frequency: 600,
+      to: 2600,
+      q: 1.2,
+      volume: 0.6,
+      decay: 0.28,
+    });
+    this.noiseHit(context, out, now + 0.02, {
+      type: 'highpass',
+      frequency: 3000,
+      volume: 0.25,
+      decay: 0.06,
+    });
+    this.tone(context, out, now, {
+      type: 'triangle',
+      from: 220,
+      to: 480,
+      volume: 0.25,
+      decay: 0.15,
+    });
+  }
+
+  /** A spit: a throaty hawk and a wet "ptoo". */
+  spit(at?: Place): void {
+    const voice = this.voice(0.6, at);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    this.noiseHit(context, out, now, {
+      type: 'bandpass',
+      frequency: 900,
+      to: 400,
+      q: 4,
+      volume: 0.5,
+      decay: 0.18,
+    });
+    this.tone(context, out, now + 0.12, {
+      type: 'sine',
+      from: 600,
+      to: 160,
+      volume: 0.5,
+      decay: 0.12,
+    });
+    this.noiseHit(context, out, now + 0.12, {
+      type: 'lowpass',
+      frequency: 2400,
+      q: 6,
+      volume: 0.4,
+      decay: 0.1,
+    });
+  }
+
+  /** Spit landing: a gloopy splat (loud when it's in your eyes). */
+  splat(at?: Place): void {
+    const voice = this.voice(0.7, at);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    this.noiseHit(context, out, now, {
+      type: 'lowpass',
+      frequency: 1800,
+      to: 200,
+      q: 9,
+      volume: 0.7,
+      decay: 0.25,
+    });
+    this.tone(context, out, now, { type: 'sine', from: 320, to: 90, volume: 0.4, decay: 0.15 });
+  }
+
+  /** A charge: a bellow and a drum-roll of heavy feet. */
+  charge(at?: Place): void {
+    const voice = this.voice(0.8, at);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    this.tone(context, out, now, {
+      type: 'sawtooth',
+      from: 110,
+      to: 70,
+      volume: 0.25,
+      decay: 0.7,
+      attack: 0.05,
+    });
+    for (let i = 0; i < 6; i++) {
+      this.tone(context, out, now + i * 0.17, {
+        type: 'sine',
+        from: 80,
+        to: 32,
+        volume: 0.8,
+        decay: 0.16,
+      });
+      this.noiseHit(context, out, now + i * 0.17, {
+        type: 'lowpass',
+        frequency: 400,
+        volume: 0.35,
+        decay: 0.12,
+      });
+    }
+  }
+
+  /** Stunned: birdies twittering round your head. */
+  stunned(at?: Place): void {
+    const voice = this.voice(0.45, at);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    for (let i = 0; i < 5; i++) {
+      const from = 1600 + (i % 2) * 500;
+      this.tone(context, out, now + i * 0.13, {
+        type: 'sine',
+        from,
+        to: from * 1.4,
+        volume: 0.35,
+        decay: 0.1,
+      });
+    }
+    this.tone(context, out, now, { type: 'triangle', from: 300, to: 150, volume: 0.2, decay: 0.6 });
+  }
+
+  /** Hatching (spawning): a little chirp. */
+  hatch(): void {
+    const voice = this.voice(0.4);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    this.noiseHit(context, out, now, {
+      type: 'highpass',
+      frequency: 2500,
+      volume: 0.3,
+      decay: 0.04,
+    });
+    this.tone(context, out, now + 0.06, {
+      type: 'sine',
+      from: 1100,
+      to: 1700,
+      volume: 0.35,
+      decay: 0.12,
+    });
+    this.tone(context, out, now + 0.2, {
+      type: 'sine',
+      from: 1300,
+      to: 2000,
+      volume: 0.3,
+      decay: 0.12,
+    });
+  }
+
+  /** A new round: a short rising fanfare. */
+  roundStart(): void {
+    const voice = this.voice(0.5);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    [392, 523, 659, 784].forEach((frequency, index) => {
+      this.tone(context, out, now + index * 0.12, {
+        type: 'triangle',
+        from: frequency,
+        to: frequency,
+        volume: 0.3,
+        decay: index === 3 ? 0.6 : 0.2,
+        attack: 0.02,
+      });
+    });
+  }
+
+  /** The meteor warning: a deep, wavering alarm. */
+  meteorWarning(): void {
+    const voice = this.voice(0.6);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    for (let i = 0; i < 3; i++) {
+      this.tone(context, out, now + i * 0.7, {
+        type: 'sawtooth',
+        from: 220,
+        to: 140,
+        volume: 0.22,
+        decay: 0.6,
+        attack: 0.08,
+      });
+      this.tone(context, out, now + i * 0.7, {
+        type: 'sine',
+        from: 110,
+        to: 70,
+        volume: 0.4,
+        decay: 0.65,
+        attack: 0.08,
+      });
+    }
+  }
+
+  /** The podium: a bright jingle if you won, a gentler one if you placed, a low one if not. */
+  podium(place: number): void {
+    const voice = this.voice(0.5);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    const notes =
+      place === 1
+        ? [523, 659, 784, 1047, 1319]
+        : place > 0 && place <= 3
+          ? [440, 554, 659, 880]
+          : [392, 349, 330, 262];
+    notes.forEach((frequency, index) => {
+      this.tone(context, out, now + index * 0.14, {
+        type: 'triangle',
+        from: frequency,
+        to: frequency,
+        volume: 0.3,
+        decay: index === notes.length - 1 ? 0.9 : 0.22,
+        attack: 0.02,
+      });
+    });
+  }
+
+  /** Snatching up a carcass: a meaty squelch. */
+  grab(): void {
+    const voice = this.voice(0.5);
+    if (!voice) return;
+    const { context, out } = voice;
+    const now = context.currentTime;
+    this.noiseHit(context, out, now, {
+      type: 'lowpass',
+      frequency: 1100,
+      to: 300,
+      q: 8,
+      volume: 0.6,
+      decay: 0.18,
+    });
+    this.tone(context, out, now, { type: 'sine', from: 160, to: 70, volume: 0.5, decay: 0.12 });
+  }
+
+  /** Something big knocked you aside. */ /** Something big knocked you aside. */
   thud(): void {
     const voice = this.voice(0.6);
     if (!voice) return;

@@ -44,6 +44,10 @@ export const DinoState = schema(
     refillIn: t.float32().default(0),
     carrying: t.boolean().default(false),
     eating: t.boolean().default(false),
+    abilityCooldown: t.float32().default(0),
+    chargingFor: t.float32().default(0),
+    stunnedFor: t.float32().default(0),
+    blurredFor: t.float32().default(0),
   },
   'Dino',
 );
@@ -176,6 +180,7 @@ export const InputState = schema(
     sprint: t.boolean().default(false),
     bite: t.boolean().default(false),
     eat: t.boolean().default(false),
+    ability: t.boolean().default(false),
   },
   'Input',
 );

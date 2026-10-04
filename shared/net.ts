@@ -1,3 +1,4 @@
+import type { AbilityId } from './config.ts';
 import { clamp } from './math.ts';
 import type { PlayerInput } from './movement.ts';
 import type { HappeningKind, MeatSize } from './sim/entities.ts';
@@ -42,6 +43,7 @@ export interface WireInput {
   sprint: boolean;
   bite: boolean;
   eat: boolean;
+  ability: boolean;
 }
 
 export function toWireInput(input: PlayerInput, out: WireInput): WireInput {
@@ -50,6 +52,7 @@ export function toWireInput(input: PlayerInput, out: WireInput): WireInput {
   out.sprint = input.sprint;
   out.bite = input.bite;
   out.eat = input.eat;
+  out.ability = input.ability;
   return out;
 }
 
@@ -64,6 +67,7 @@ export function fromWireInput(wire: { readonly [K in keyof WireInput]?: unknown 
     sprint: wire.sprint === true,
     bite: wire.bite === true,
     eat: wire.eat === true,
+    ability: wire.ability === true,
   };
 }
 
@@ -133,7 +137,13 @@ export type NetEvent =
     }
   | { readonly type: 'meteorWarning' }
   | { readonly type: 'meteorImpact' }
-  | { readonly type: 'roundStarted'; readonly round: number };
+  | { readonly type: 'roundStarted'; readonly round: number }
+  /** A dinosaur this client can see used its ability. */
+  | { readonly type: 'ability'; readonly dinoId: number; readonly ability: AbilityId }
+  /** Spit hit a dinosaur (sent to its player, and to those who can see it). */
+  | { readonly type: 'spat'; readonly targetId: number; readonly byId: number }
+  /** A roar stunned a dinosaur (sent to its player, and to those who can see it). */
+  | { readonly type: 'stunned'; readonly dinoId: number; readonly byId: number };
 
 /** Test commands, for browser tests against a dev server. They act on the sender's own dinosaur. */
 export type TestCommand =
@@ -193,6 +203,12 @@ export interface NetDino {
   /** Has a carcass in its mouth. */
   readonly carrying: boolean;
   readonly eating: boolean;
+  /** Seconds before the ability can be used again. */
+  readonly abilityCooldown: number;
+  /** Seconds of charge, of being stunned and of blurred sight left. */
+  readonly chargingFor: number;
+  readonly stunnedFor: number;
+  readonly blurredFor: number;
 }
 
 export interface NetScrap {

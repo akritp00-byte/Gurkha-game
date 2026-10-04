@@ -26,6 +26,8 @@ const KEY_BINDINGS: Readonly<Partial<Record<string, Action>>> = {
 
 /** Keys that bite (as well as the left mouse button). */
 const BITE_KEYS = new Set(['Space']);
+/** The tier's ability: pounce, spit, charge or roar. */
+const ABILITY_KEYS = new Set(['KeyQ']);
 
 interface Pointer {
   readonly id: number;
@@ -65,6 +67,8 @@ export class Controls {
   private eatTouch: number | null = null;
   /** A click or tap since the last sample: one bite. */
   private biteQueued = false;
+  /** Q pressed since the last sample: use the ability once. */
+  private abilityQueued = false;
   private readonly joystickBase: HTMLElement;
   private readonly joystickKnob: HTMLElement;
   private readonly sprintButton: HTMLButtonElement;
@@ -124,13 +128,16 @@ export class Controls {
         ? mouseInput(this.mouse.x - dinoOnScreen.x, this.mouse.y - dinoOnScreen.y)
         : keyboardInput(this.keys);
     const bite = this.biteQueued;
+    const ability = this.abilityQueued;
     this.biteQueued = false;
+    this.abilityQueued = false;
     return {
       turn: steering.turn,
       throttle: steering.throttle,
       sprint: this.keys.sprint || this.sprintTouch !== null,
       bite,
       eat: this.keys.eat || this.eatTouch !== null,
+      ability,
     };
   }
 
@@ -160,6 +167,14 @@ export class Controls {
     if (BITE_KEYS.has(event.code)) {
       event.preventDefault();
       if (!event.repeat) this.queueBite();
+      return;
+    }
+    if (ABILITY_KEYS.has(event.code)) {
+      event.preventDefault();
+      if (!event.repeat) {
+        this.abilityQueued = true;
+        this.used = true;
+      }
       return;
     }
     const action = KEY_BINDINGS[event.code];

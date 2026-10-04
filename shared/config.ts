@@ -316,14 +316,15 @@ export const ROOM = {
 
 /**
  * Bot behaviour (BUILD_PROMPT.md §3, "Rooms and bots"). Bots must never feel perfect, and
- * they're tuned to be beatable: slow to react, easily distracted, lazy hunters that never sprint
- * after prey, wary of the danger zones, and late to notice a threat.
+ * they're tuned to be beatable: slow-ish to react, easily distracted, hunters that never sprint
+ * after prey and soon give up, wary of the danger zones, and late to notice a threat. They do
+ * use their abilities, now and then.
  */
 export const BOTS = {
   /** Bots decide this often, like a human's reaction time. Skilled bots react faster. */
-  reactionDelayMs: { min: 350, max: 750 },
+  reactionDelayMs: { min: 300, max: 650 },
   /** Each bot gets a skill from this range: 0 is clumsy and inattentive, 1 is sharp. */
-  skill: { min: 0.05, max: 0.6 },
+  skill: { min: 0.1, max: 0.75 },
   /** How far bots notice food and prey: base distance plus extra per body scale. */
   sightRange: 26,
   sightPerScale: 3,
@@ -334,23 +335,23 @@ export const BOTS = {
   /** Food and prey are scored as mass gained / (distance + this), so nearby food wins. */
   distanceBias: 4,
   /** Bots would mostly rather eat than fight: prey scores this fraction of its worth. */
-  preyAppeal: 0.35,
+  preyAppeal: 0.5,
   /**
    * Bots heavier than this stop hunting and only graze and scavenge, so no bot runs away with
    * the round by eating everyone else; the top of the leaderboard is for players to fight over.
    */
-  maxHuntingMass: 250,
+  maxHuntingMass: 400,
   /** Critters run away, so bots value them at this fraction of their mass. */
   critterAppeal: 0.5,
   /** ...and at this fraction once a critter is fleeing faster than the bot can run. */
   fleeingCritterAppeal: 0.15,
   /** Bots are wary of the danger zones: food there is worth this fraction of its plain mass to them. */
-  dangerZoneAppeal: 0.1,
+  dangerZoneAppeal: 0.2,
   /** Bots amble after food and prey at this throttle; only fleeing gets full speed. */
-  cruiseThrottle: 0.85,
+  cruiseThrottle: 0.9,
   /** A bot gives up a chase after this long and leaves hunting alone for a while. */
-  chaseGiveUpSeconds: 4,
-  huntCooldownSeconds: 10,
+  chaseGiveUpSeconds: 5,
+  huntCooldownSeconds: 7,
   /** Small bots that are fleeing run for a fern patch within this distance. */
   fernSeekRange: 35,
   /** Wandering bots stroll to a spot this far away. */
@@ -362,15 +363,22 @@ export const BOTS = {
   /** How far ahead bots look out for tar pits and the crater, from the clumsiest to the sharpest. */
   hazardLookahead: { min: 4, max: 12 },
   /** Chance per decision that a bot gets distracted and wanders off, ignoring everything. */
-  distractionChance: 0.08,
+  distractionChance: 0.06,
   distractionSeconds: { min: 1.5, max: 3.5 },
   /**
    * How alert bots are to threats: the flee range is scaled by this, from the clumsiest to the
    * sharpest, so clumsy bots notice danger late.
    */
-  alertness: { min: 0.3, max: 0.8 },
+  alertness: { min: 0.4, max: 0.95 },
   /** Chance per tick that a bot bites when its prey is in reach, from the clumsiest to the sharpest. */
-  biteChance: { min: 0.03, max: 0.12 },
+  biteChance: { min: 0.05, max: 0.2 },
+  /** Chance per tick that a bot uses its ability when it would help, from clumsiest to sharpest. */
+  abilityChance: { min: 0.03, max: 0.12 },
+  /** A hunting raptor pounces once its prey is this close; an Allosaurus charges from this far. */
+  pounceRange: 5,
+  chargeRange: 9,
+  /** A bot spat in the eyes sees only this fraction as far. */
+  blurredSight: 0.35,
   /** Bots value a world-event carcass at this fraction of its food, and hear about it from this far. */
   eventCarcassAppeal: 0.3,
   eventHearingRange: 80,
@@ -383,12 +391,32 @@ export interface AbilityTuning {
   readonly [setting: string]: number;
 }
 
-/** Tier abilities (BUILD_PROMPT.md §3; implemented in milestone 6). */
+/** Tier abilities (BUILD_PROMPT.md §3), on Q. Each has its own cooldown. */
 export const ABILITIES = {
-  pounce: { cooldownSeconds: 6 },
-  spit: { cooldownSeconds: 8, blurSeconds: 2 },
-  charge: { cooldownSeconds: 10 },
-  roar: { cooldownSeconds: 12, stunSeconds: 1.5 },
+  /** Velociraptor: a dash forward, thrown at this speed (it fades like any push). */
+  pounce: { cooldownSeconds: 6, speed: 20 },
+  /**
+   * Dilophosaurus: spit at the nearest dinosaur in front, within `range` units plus
+   * `rangePerScale` per body scale and `coneAngle` radians either side, blurring its view.
+   */
+  spit: { cooldownSeconds: 8, blurSeconds: 2, range: 12, rangePerScale: 2.5, coneAngle: 0.5 },
+  /**
+   * Allosaurus: a charge, fast and hard to steer, that knocks smaller dinosaurs it touches
+   * aside (and loose of whatever they carry). `reach` is extra body scales round the charger.
+   */
+  charge: {
+    cooldownSeconds: 10,
+    seconds: 1.4,
+    speedMultiplier: 1.8,
+    turnMultiplier: 0.35,
+    knockback: 16,
+    reach: 0.35,
+  },
+  /**
+   * T-Rex: a roar that stuns every smaller dinosaur within `radiusScales` body scales: it
+   * stands frozen and drops whatever it carries.
+   */
+  roar: { cooldownSeconds: 12, stunSeconds: 1.5, radiusScales: 2.6 },
 } as const satisfies Record<AbilityId, AbilityTuning>;
 
 /** Networking (BUILD_PROMPT.md §5). */
@@ -485,6 +513,12 @@ export const EFFECTS = {
   /** ...and the impact itself shakes hard, behind a white flash that fades over this long. */
   impactShake: 1.2,
   impactFlashSeconds: 1.2,
+  /** Being roared at (or roaring close by) and charging shake the camera this hard. */
+  roarShake: 0.7,
+  chargeShake: 0.35,
+  /** A giant's footsteps shake the camera this hard when it's right beside you, fading to nothing this far away. */
+  footstepShake: 0.12,
+  footstepShakeDistance: 30,
 } as const;
 
 /** Steering feel for mouse and touch controls. */

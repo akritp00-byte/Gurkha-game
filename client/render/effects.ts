@@ -22,7 +22,7 @@ import {
  * little low-poly lumps. Each kind is one instanced draw call however many are flying.
  */
 
-export type ParticleKind = 'spark' | 'ember' | 'blood' | 'dust' | 'smoke';
+export type ParticleKind = 'spark' | 'ember' | 'blood' | 'goo' | 'dust' | 'smoke';
 
 interface Particle {
   kind: ParticleKind;
@@ -37,6 +37,15 @@ interface Particle {
   size: number;
   spin: number;
   color: Color;
+}
+
+/** A glob of spit in flight, from the spitter's mouth to its target. */
+interface Glob {
+  readonly from: Vector3;
+  readonly to: Vector3;
+  age: number;
+  readonly duration: number;
+  readonly size: number;
 }
 
 interface Ring {
@@ -58,6 +67,7 @@ const KINDS: Readonly<
   spark: { look: 'glow', gravity: -4, drag: 1.5, grow: -0.6 },
   ember: { look: 'glow', gravity: 1.5, drag: 0.6, grow: -0.8 },
   blood: { look: 'lump', gravity: -14, drag: 0.5, grow: -0.7 },
+  goo: { look: 'lump', gravity: -12, drag: 0.8, grow: -0.6 },
   dust: { look: 'puff', gravity: 0.6, drag: 3, grow: 1.4 },
   smoke: { look: 'puff', gravity: 1.2, drag: 0.3, grow: 1.6 },
 };
@@ -67,6 +77,9 @@ const MAX_RINGS = 12;
 
 const matrix = new Matrix4();
 const tint = new Color();
+const STAR = new Color(0xffe066);
+const GOO = 0x8fd13a;
+const GOO_GLOW = new Color(0x9cff40);
 const position = new Vector3();
 const scale = new Vector3();
 const rotation = new Quaternion();
@@ -98,6 +111,9 @@ export class Effects {
   private readonly puffs: InstancedMesh;
   private readonly rings: InstancedMesh;
   private readonly particles: Particle[] = [];
+  private readonly globs: Glob[] = [];
+  /** Sprites to draw this frame only (stun stars), cleared after each update. */
+  private readonly sprites: { x: number; y: number; z: number; size: number; color: Color }[] = [];
   private readonly ringList: Ring[] = [];
   private readonly spare: Particle[] = [];
 
@@ -206,6 +222,36 @@ export class Effects {
     });
   }
 
+  /** Spit flying in an arc from `from` to `to`, splattering on arrival. */
+  spit(from: Vector3, to: Vector3, size: number): void {
+    const distance = from.distanceTo(to);
+    this.globs.push({
+      from: from.clone(),
+      to: to.clone(),
+      age: 0,
+      duration: 0.12 + distance / 40,
+      size,
+    });
+  }
+
+  /** Three stars circling over a stunned dinosaur's head, for this frame. */
+  stars(
+    at: { readonly x: number; readonly y: number; readonly z: number },
+    scale: number,
+    time: number,
+  ): void {
+    for (let i = 0; i < 3; i++) {
+      const angle = time * 5 + (i * Math.PI * 2) / 3;
+      this.sprites.push({
+        x: at.x + Math.cos(angle) * 0.45 * scale,
+        y: at.y + Math.sin(time * 9 + i) * 0.06 * scale,
+        z: at.z + Math.sin(angle) * 0.45 * scale,
+        size: 0.32 * scale,
+        color: STAR,
+      });
+    }
+  }
+
   /** The evolution burst: a fountain of golden sparks and a ring of light. */
   evolve(
     at: { readonly x: number; readonly y: number; readonly z: number },
@@ -233,9 +279,50 @@ export class Effects {
   }
 
   update(dt: number, camera: Camera): void {
+    // Globs of spit fly in an arc, dribbling, and splat where they land.
+    for (let i = this.globs.length - 1; i >= 0; i--) {
+      const glob = this.globs[i];
+      glob.age += dt;
+      const t = Math.min(glob.age / glob.duration, 1);
+      const height = glob.from.distanceTo(glob.to) * 0.12;
+      const x = glob.from.x + (glob.to.x - glob.from.x) * t;
+      const y = glob.from.y + (glob.to.y - glob.from.y) * t + Math.sin(t * Math.PI) * height;
+      const z = glob.from.z + (glob.to.z - glob.from.z) * t;
+      this.sprites.push({ x, y, z, size: glob.size * 1.6, color: GOO_GLOW });
+      if (Math.random() < 0.5) {
+        this.burst('goo', { x, y, z }, 1, {
+          speed: 1,
+          size: glob.size * 0.5,
+          life: 0.4,
+          color: GOO,
+          lift: 0,
+        });
+      }
+      if (t >= 1) {
+        this.burst('goo', glob.to, 14, {
+          speed: 4,
+          size: glob.size * 0.7,
+          life: 0.7,
+          color: GOO,
+          lift: 0.5,
+          spread: 1,
+        });
+        this.globs.splice(i, 1);
+      }
+    }
+
     let glows = 0;
     let lumps = 0;
     let puffs = 0;
+    for (const sprite of this.sprites) {
+      if (glows >= MAX.glow) break;
+      position.set(sprite.x, sprite.y, sprite.z);
+      matrix.compose(position, camera.quaternion, scale.setScalar(sprite.size));
+      this.glows.setMatrixAt(glows, matrix);
+      this.glows.setColorAt(glows, sprite.color);
+      glows++;
+    }
+    this.sprites.length = 0;
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.age += dt;

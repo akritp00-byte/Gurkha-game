@@ -1,4 +1,5 @@
 import {
+  ABILITIES,
   BITING,
   CARCASS,
   CRITTERS,
@@ -71,6 +72,7 @@ import type {
   WorldSenses,
 } from './entities.ts';
 import { BOT_NAMES, CARCASS_SPECIES } from './names.ts';
+import { chargeHits, roarVictims, spitTarget } from '../abilities/abilities.ts';
 import {
   DEFAULT_ROUND,
   roundLength,
@@ -149,6 +151,8 @@ export class GameWorld implements WorldSenses {
   /** Seconds simulated so far. The vents run off this clock. */
   time = 0;
   private readonly brains = new Map<number, BotBrain>();
+  /** Who each charging dinosaur has already knocked aside this charge. */
+  private readonly chargedInto = new Map<number, Set<number>>();
   private readonly random: Random;
   /** Bots get their own random stream, so adding bots doesn't change where food appears. */
   private readonly botRandom: Random;
@@ -251,7 +255,8 @@ export class GameWorld implements WorldSenses {
 
     this.respawnDinos(dt, events);
     const all = this.withBotInputs(inputs, dt);
-    this.moveDinos(all, dt);
+    this.moveDinos(all, dt, events);
+    this.chargeInto(events);
     this.carryCarcasses();
     this.eruptVents(before, events);
     this.moveCritters(dt);
@@ -349,6 +354,7 @@ export class GameWorld implements WorldSenses {
       dino.pushZ = 0;
       dino.sprinting = false;
       dino.eating = false;
+      dino.chargingFor = 0;
     }
     events.push({ type: 'meteorImpact' });
   }
@@ -418,6 +424,11 @@ export class GameWorld implements WorldSenses {
       massAtDeath: 0,
       rankAtDeath: 0,
       rank: 0,
+      abilityCooldown: 0,
+      chargingFor: 0,
+      stunnedFor: 0,
+      abilityUsed: null,
+      blurredFor: 0,
     };
     this.placeSafely(dino);
     this.dinos.set(dino.id, dino);
@@ -444,6 +455,11 @@ export class GameWorld implements WorldSenses {
     dino.protectedFor = ROUND.spawnProtectionSeconds;
     dino.biteCooldown = 0;
     dino.eating = false;
+    dino.abilityCooldown = 0;
+    dino.chargingFor = 0;
+    dino.stunnedFor = 0;
+    dino.abilityUsed = null;
+    dino.blurredFor = 0;
   }
 
   /**
@@ -501,13 +517,79 @@ export class GameWorld implements WorldSenses {
     return all;
   }
 
-  private moveDinos(inputs: ReadonlyMap<number, PlayerInput>, dt: number): void {
+  private moveDinos(
+    inputs: ReadonlyMap<number, PlayerInput>,
+    dt: number,
+    events: WorldEvent[],
+  ): void {
     for (const dino of this.dinos.values()) {
       if (!dino.alive) continue;
       dino.protectedFor = countDown(dino.protectedFor, dt);
       dino.biteCooldown = countDown(dino.biteCooldown, dt);
+      dino.blurredFor = countDown(dino.blurredFor, dt);
       dino.eating = false;
       stepLocomotion(dino, inputs.get(dino.id) ?? IDLE_INPUT, dt);
+    }
+    // Abilities act once everyone has moved, so nobody is spat at or roared at from where
+    // they were last tick.
+    for (const dino of this.dinos.values()) {
+      if (dino.alive && dino.abilityUsed !== null) this.useAbility(dino, events);
+    }
+  }
+
+  // --- Abilities ------------------------------------------------------------------
+
+  /** What a spit or a roar does to others (a pounce and a charge are movement: see stepLocomotion). */
+  private useAbility(dino: Dino, events: WorldEvent[]): void {
+    const ability = dino.abilityUsed;
+    if (ability === null) return;
+    events.push({ type: 'ability', dinoId: dino.id, ability });
+    this.chargedInto.delete(dino.id);
+    // Spawn protection works both ways: a protected dinosaur's ability touches nobody.
+    if (dino.protectedFor > 0) return;
+    if (ability === 'spit') {
+      const target = spitTarget(dino, this.dinos.values());
+      if (!target) return;
+      target.blurredFor = Math.max(target.blurredFor, ABILITIES.spit.blurSeconds);
+      events.push({ type: 'spat', targetId: target.id, byId: dino.id });
+    } else if (ability === 'roar') {
+      for (const victim of roarVictims(dino, this.dinos.values())) {
+        victim.stunnedFor = Math.max(victim.stunnedFor, ABILITIES.roar.stunSeconds);
+        victim.chargingFor = 0;
+        victim.speed = 0;
+        this.letGo(victim);
+        events.push({ type: 'stunned', dinoId: victim.id, byId: dino.id });
+      }
+    }
+  }
+
+  /** Charging dinosaurs knock smaller ones they touch aside, each once per charge. */
+  private chargeInto(events: WorldEvent[]): void {
+    for (const charger of this.dinos.values()) {
+      if (!charger.alive || charger.chargingFor <= 0 || charger.protectedFor > 0) {
+        this.chargedInto.delete(charger.id);
+        continue;
+      }
+      let hit = this.chargedInto.get(charger.id);
+      for (const target of chargeHits(charger, this.dinos.values())) {
+        if (hit?.has(target.id)) continue;
+        if (!hit) {
+          hit = new Set();
+          this.chargedInto.set(charger.id, hit);
+        }
+        hit.add(target.id);
+        // Thrown aside and ahead, whichever side of the charger it was on.
+        const dx = target.x - charger.x;
+        const dz = target.z - charger.z;
+        const distance = Math.hypot(dx, dz);
+        const awayX = (distance > 1e-6 ? dx / distance : 0) + Math.sin(charger.heading) * 0.6;
+        const awayZ = (distance > 1e-6 ? dz / distance : 0) + Math.cos(charger.heading) * 0.6;
+        const length = Math.hypot(awayX, awayZ) || 1;
+        target.pushX += (awayX / length) * ABILITIES.charge.knockback;
+        target.pushZ += (awayZ / length) * ABILITIES.charge.knockback;
+        this.letGo(target);
+        events.push({ type: 'shoved', dinoId: target.id, byId: charger.id });
+      }
     }
   }
 
@@ -519,7 +601,13 @@ export class GameWorld implements WorldSenses {
    */
   private resolveBites(inputs: ReadonlyMap<number, PlayerInput>, events: WorldEvent[]): void {
     const biters = [...this.dinos.values()]
-      .filter((dino) => dino.alive && dino.biteCooldown <= 0 && inputs.get(dino.id)?.bite === true)
+      .filter(
+        (dino) =>
+          dino.alive &&
+          dino.biteCooldown <= 0 &&
+          dino.stunnedFor <= 0 &&
+          inputs.get(dino.id)?.bite === true,
+      )
       .sort((a, b) => b.mass - a.mass || a.id - b.id);
     for (const biter of biters) {
       if (!biter.alive) continue;
@@ -701,7 +789,7 @@ export class GameWorld implements WorldSenses {
     events: WorldEvent[],
   ): void {
     for (const dino of this.dinos.values()) {
-      if (!dino.alive || inputs.get(dino.id)?.eat !== true) continue;
+      if (!dino.alive || dino.stunnedFor > 0 || inputs.get(dino.id)?.eat !== true) continue;
       // A mouth full of carcass eats that; otherwise whatever lies in front of the mouth, or
       // under the dinosaur if it has walked right onto a big one.
       const carcass =

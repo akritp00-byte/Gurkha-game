@@ -69,6 +69,7 @@ export class TestClient {
     sprint: false,
     bite: false,
     eat: false,
+    ability: false,
   };
 
   private constructor(room: Awaited<ReturnType<typeof joinGame>>) {
@@ -126,6 +127,7 @@ export class TestClient {
     this.input.data.sprint = this.wire.sprint;
     this.input.data.bite = this.wire.bite;
     this.input.data.eat = this.wire.eat;
+    this.input.data.ability = this.wire.ability;
     this.input.send();
   }
 

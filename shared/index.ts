@@ -15,3 +15,4 @@ export * from './tiers.ts';
 export * from './visibility.ts';
 export * from './world/layout.ts';
 export * from './world/terrain.ts';
+export * from './abilities/abilities.ts';

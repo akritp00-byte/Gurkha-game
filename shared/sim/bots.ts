@@ -13,6 +13,7 @@ import { IDLE_INPUT, type PlayerInput, speedForMass, turnRateForMass } from '../
 import { type Random, randomRange } from '../random.ts';
 import { scaleForMass, tierForMass } from '../tiers.ts';
 import { canSee } from '../visibility.ts';
+import { roarVictims, spitTarget } from '../abilities/abilities.ts';
 import { type CircleArea, FERN_PATCHES, TAR_PITS, VOLCANO } from '../world/layout.ts';
 import { dangerZoneAt } from '../world/terrain.ts';
 import type { Carcass, Dino, WorldSenses } from './entities.ts';
@@ -150,11 +151,17 @@ export function botInput(
     );
   }
   const steering = steer(brain, self, dt);
-  return { ...steering, ...act(brain, self, senses, random) };
+  return {
+    ...steering,
+    ...act(brain, self, senses, random),
+    ability: wantsAbility(brain, self, senses, random),
+  };
 }
 
 function decide(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random): void {
-  brain.wobbleTarget = randomRange(random, -1, 1) * BOTS.maxSteeringWobble * (1 - brain.skill);
+  // Spit in the eyes, a bot steers half blind.
+  const sloppiness = self.blurredFor > 0 ? 1 : 1 - brain.skill;
+  brain.wobbleTarget = randomRange(random, -1, 1) * BOTS.maxSteeringWobble * sloppiness;
   brain.sprint = false;
 
   const fixation = fixatedPrey(brain, senses);
@@ -427,8 +434,11 @@ function wander(brain: BotBrain, self: Dino, random: Random): void {
 }
 
 function sightRange(brain: BotBrain, self: Dino): number {
+  const blurred = self.blurredFor > 0 ? BOTS.blurredSight : 1;
   return (
-    (BOTS.sightRange + BOTS.sightPerScale * scaleForMass(self.mass)) * lerp(0.75, 1, brain.skill)
+    (BOTS.sightRange + BOTS.sightPerScale * scaleForMass(self.mass)) *
+    lerp(0.75, 1, brain.skill) *
+    blurred
   );
 }
 
@@ -519,6 +529,38 @@ function act(
   }
   const bite = target !== null && random() < (target === 'prey' ? chance : chance / 2);
   return { bite, eat: eat && !bite };
+}
+
+/**
+ * Whether a bot uses its ability this tick, now and then when it would help: a raptor pounces
+ * on prey just ahead or away from a threat close behind, a Dilophosaurus spits at what it's
+ * chasing or running from, an Allosaurus charges prey ahead, and a T-Rex roars when smaller
+ * dinosaurs crowd round it.
+ */
+function wantsAbility(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random): boolean {
+  if (self.abilityCooldown > 0 || self.stunnedFor > 0 || self.protectedFor > 0) return false;
+  const ability = tierForMass(self.mass).ability;
+  if (ability === null) return false;
+  if (random() >= lerp(BOTS.abilityChance.min, BOTS.abilityChance.max, brain.skill)) return false;
+  if (ability === 'roar') {
+    return roarVictims(self, senses.dinos.values()).length >= (brain.mode === 'hunt' ? 1 : 2);
+  }
+  const target = brain.targetId === null ? undefined : senses.dinos.get(brain.targetId);
+  if (!target?.alive || (brain.mode !== 'hunt' && brain.mode !== 'flee')) return false;
+  const dx = target.x - self.x;
+  const dz = target.z - self.z;
+  const gap = Math.hypot(dx, dz) - bodyRadius(target.mass) - biteReach(self.mass);
+  const offAngle = Math.abs(angleDelta(self.heading, Math.atan2(dx, dz)));
+  switch (ability) {
+    case 'pounce':
+      return brain.mode === 'hunt'
+        ? gap < BOTS.pounceRange && offAngle < 0.3
+        : gap < BOTS.sprintRange && offAngle > 2.4;
+    case 'spit':
+      return spitTarget(self, [target]) === target;
+    case 'charge':
+      return brain.mode === 'hunt' && gap < BOTS.chargeRange && offAngle < 0.25;
+  }
 }
 
 /** Steer round tar pits and the crater, unless the goal itself is in one. */

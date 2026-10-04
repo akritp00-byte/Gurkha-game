@@ -2,6 +2,28 @@
 
 One entry per milestone (BUILD_PROMPT.md §9), newest first.
 
+## M6: Abilities, sound and juice (2026-10-04)
+
+### Added
+
+- **Abilities, on Q**, one per species from the Velociraptor up, each with its own cooldown shown on a tile beside the HUD (a hatchling sees what it unlocks at 40 mass):
+  - **Pounce** (Velociraptor, 6 s): a leap forward, a burst of dust.
+  - **Spit** (Dilophosaurus, 8 s): a glob arcs at the nearest dinosaur in front, of any size. A player hit sees the world blur and go green for 2 s; a bot steers half blind.
+  - **Charge** (Allosaurus, 10 s): 1.4 s of head-down charging at 1.8× speed, hard to steer, barging every smaller dinosaur it touches aside and knocking its food loose.
+  - **Roar** (T-Rex, 12 s): a shockwave that stuns every smaller dinosaur nearby for 1.5 s: it can't move, bite or eat, drops what it carries, and stars circle its head.
+  - Pounce, charge, stun and the cooldowns run in the shared movement step, so your own dinosaur reacts at once online too. Spawn-protected dinosaurs are immune.
+  - The bots use them: raptors pounce on prey ahead (or away from danger), Dilophosauruses spit at what they chase or flee, Allosauruses charge prey, and T-Rexes roar at a crowd.
+- **Sound for every key event**, all synthesised: pounce, spit and splat, charge, roar, stunned, hatching, a round's fanfare, the meteor alarm, a podium jingle (brighter if you won), and grabbing a carcass, on top of M5's chomps, bites, kills, footsteps, evolutions, events, vents and the impact.
+- **Juice**: the ground shakes under a giant's feet, a roar shakes everyone near it, a charge shakes the charger, and spit punches the camera.
+- **Tests**: the movement step's pounce, charge, stun and cooldowns; spit, roar and charge in the world (and that spawn protection blocks them); bots that pounce and roar; each ability played between two real clients on the server (the M6 check); and browser tests for the ability tile, pounce, roar and spit.
+
+### Changed
+
+- **Bots are a little tougher** than in M5: they react faster (0.3–0.65 s), are a bit sharper, are keener to hunt (up to 400 mass, and they give up a chase later), bite more readily, notice threats sooner, and use their abilities.
+- The controls hint moved up, clear of the HUD row.
+- The test hook `placeDinoAhead` takes a behaviour: `'still'`, or `'hunt'` for a bot that goes straight for the player.
+- PC is the target from now on: touch controls still work, but phones get no new features.
+
 ## M5: Art pass, plus weaker bots, meat, 20-minute rounds and sound (2026-10-04)
 
 M5 is the art pass, and also takes in the changes asked for after M4: the bots were far too strong, bigger dinosaurs were too slow to snowball a lead, eggs looked out of place, rounds were too short, and there was no sound.

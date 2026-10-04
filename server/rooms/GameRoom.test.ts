@@ -183,6 +183,72 @@ describe('game room', () => {
     expect(bob.me?.protectedFor).toBeGreaterThan(0);
   });
 
+  describe('abilities in multiplayer', () => {
+    /** Two players a few units apart on the open plains, facing each other, unprotected. */
+    async function pair(room: string, userMass: number, otherMass: number, gap = 8) {
+      const user = await player({ room, bots: 0, name: 'User' });
+      const other = await player({ room, bots: 0, name: 'Other' });
+      user.command({ cmd: 'setMass', mass: userMass });
+      other.command({ cmd: 'setMass', mass: otherMass });
+      user.command({ cmd: 'teleport', x: 60, z: 0, heading: 0 });
+      other.command({ cmd: 'teleport', x: 60, z: gap, heading: Math.PI });
+      user.command({ cmd: 'endProtection' });
+      other.command({ cmd: 'endProtection' });
+      // Big mouths may gulp some meat lying about, so masses can end up a little higher.
+      await waitFor(
+        () => (user.me?.mass ?? 0) >= userMass && other.me?.z === gap && other.me.mass >= otherMass,
+        3000,
+        'set up',
+      );
+      return { user, other };
+    }
+
+    const Q = { ...IDLE_INPUT, ability: true };
+
+    it('a Velociraptor pounces forward, and everyone near sees it', async () => {
+      const { user, other } = await pair('pounce', 60, 10, 20);
+      await hold(user, Q, () => (user.me?.abilityCooldown ?? 0) > 0);
+      await waitFor(() => (user.me?.z ?? 0) > 3, 2000, 'the dash');
+      await waitFor(() => other.events.some((e) => e.type === 'ability'), 2000, 'ability event');
+      expect(other.events).toContainEqual({
+        type: 'ability',
+        dinoId: user.myId,
+        ability: 'pounce',
+      });
+    });
+
+    it("a Dilophosaurus's spit blurs the other player's view", async () => {
+      const { user, other } = await pair('spit', 200, 900);
+      await hold(user, Q, () => other.events.some((e) => e.type === 'spat'));
+      expect(other.events).toContainEqual({ type: 'spat', targetId: other.myId, byId: user.myId });
+      await waitFor(() => (other.me?.blurredFor ?? 0) > 0, 2000, 'blurred');
+    });
+
+    it('an Allosaurus charge knocks a smaller player aside', async () => {
+      const { user, other } = await pair('charge', 600, 60, 12);
+      await hold(user, Q, () => other.events.some((e) => e.type === 'shoved'));
+      expect(other.events).toContainEqual({ type: 'shoved', dinoId: other.myId, byId: user.myId });
+    });
+
+    it("a T-Rex's roar stuns a smaller player, who can't move until it wears off", async () => {
+      const { user, other } = await pair('roar', 1600, 60, 14);
+      await hold(user, Q, () => other.events.some((e) => e.type === 'stunned'));
+      await waitFor(() => (other.me?.stunnedFor ?? 0) > 0, 2000, 'stunned');
+      // Running flat out does nothing while the stun lasts, then works again.
+      const stuck = other.me?.z;
+      let stunnedTicks = 0;
+      await hold(other, { ...IDLE_INPUT, throttle: 1 }, () => {
+        if ((other.me?.stunnedFor ?? 0) <= 0) return true;
+        stunnedTicks++;
+        expect(other.me?.z).toBe(stuck);
+        return false;
+      });
+      expect(stunnedTicks).toBeGreaterThan(3);
+      await hold(other, { ...IDLE_INPUT, throttle: 1 }, () => other.me?.z !== stuck);
+      expect(other.me?.z).not.toBe(stuck);
+    });
+  });
+
   it('never shows a carcass in the mouth of a dinosaur hidden in ferns', async () => {
     const patch = FERN_PATCHES[1];
     const hider = await player({ room: 'hidden-meal', bots: 0, name: 'Hider' });

@@ -20,6 +20,10 @@ export interface DinoPose {
   readonly mass: number;
   /** Holding a carcass in its jaws. */
   readonly carrying?: boolean;
+  /** Stunned by a roar: dazed, head lolling. */
+  readonly stunned?: boolean;
+  /** Charging: head down, everything forward. */
+  readonly charging?: boolean;
 }
 
 /** A bite: the jaws open wide, then snap shut. A chew is a quicker, smaller bite. */
@@ -27,6 +31,9 @@ const BITE_SECONDS = 0.32;
 const BITE_OPEN_SHARE = 0.55;
 const CHEW_SECONDS = 0.22;
 const ROAR_SECONDS = 1.5;
+/** A pounce is a leap: this long in the air, this high (in body scales). */
+const LEAP_SECONDS = 0.45;
+const LEAP_HEIGHT = 0.35;
 /** Stride length in leg lengths, walking and running. */
 const WALK_STRIDE = 2.3;
 const RUN_STRIDE = 3.6;
@@ -54,6 +61,9 @@ export class DinoView {
   private biteTime = -1;
   private chewTime = -1;
   private roarTime = -1;
+  private leapTime = -1;
+  private daze = 0;
+  private charge = 0;
   private pitch = 0;
   private lean = 0;
   private turnRate = 0;
@@ -91,6 +101,11 @@ export class DinoView {
   /** A chewing bite, while eating. */
   chew(): void {
     if (this.biteTime < 0) this.chewTime = 0;
+  }
+
+  /** Leap forward, for a pounce. */
+  leap(): void {
+    this.leapTime = 0;
   }
 
   /** Throw the head back and roar, e.g. on evolving. */
@@ -164,9 +179,21 @@ export class DinoView {
     this.lean +=
       (clamp(-this.turnRate * 0.07 * Math.min(gait, 1), -0.3, 0.3) - this.lean) * dampFactor(8, dt);
     this.carry += ((pose.carrying ? 1 : 0) - this.carry) * dampFactor(10, dt);
+    this.daze += ((pose.stunned ? 1 : 0) - this.daze) * dampFactor(8, dt);
+    this.charge += ((pose.charging ? 1 : 0) - this.charge) * dampFactor(10, dt);
 
-    this.root.position.set(pose.x, heightAt(field, pose.x, pose.z), pose.z);
-    this.root.rotation.set(this.pitch, pose.heading, this.lean);
+    // A pounce lifts the whole body in an arc, nose down as it lands.
+    let lift = 0;
+    let dive = 0;
+    if (this.leapTime >= 0) {
+      this.leapTime += dt;
+      const u = this.leapTime / LEAP_SECONDS;
+      lift = Math.sin(Math.min(u, 1) * Math.PI) * LEAP_HEIGHT * scale;
+      dive = (u - 0.5) * 0.5 * Math.sin(Math.min(u, 1) * Math.PI);
+      if (u >= 1) this.leapTime = -1;
+    }
+    this.root.position.set(pose.x, heightAt(field, pose.x, pose.z) + lift, pose.z);
+    this.root.rotation.set(this.pitch + dive + 0.12 * this.charge, pose.heading, this.lean);
     this.root.scale.setScalar(scale);
 
     this.animate(dt, pose.speed, gait, scale);
@@ -293,15 +320,23 @@ export class DinoView {
       if (u >= 1) this.roarTime = -1;
     }
 
+    // Dazed: the head lolls in slow circles. Charging: head down like a battering ram.
+    const loll = this.daze * 0.25;
     rig.neck.rotation.set(
-      0.18 * run - 0.1 * run * Math.cos(2 * phase) * walk + lunge - rear,
-      this.look * 0.6 + shake * 0.5,
+      0.18 * run -
+        0.1 * run * Math.cos(2 * phase) * walk +
+        lunge -
+        rear +
+        loll +
+        Math.sin(t * 4) * loll +
+        0.3 * this.charge,
+      this.look * 0.6 + shake * 0.5 + Math.cos(t * 4) * loll * 1.5,
       0,
     );
     rig.head.rotation.set(
-      -0.1 * run + lunge * 0.5 - rear * 0.5 - open * 0.15,
+      -0.1 * run + lunge * 0.5 - rear * 0.5 - open * 0.15 + 0.15 * this.charge,
       this.look * 0.4 + shake,
-      0,
+      Math.sin(t * 4) * loll,
     );
     rig.jaw.rotation.set(open * 0.7, 0, 0);
   }

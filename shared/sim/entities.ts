@@ -1,3 +1,4 @@
+import type { AbilityId } from '../config.ts';
 import type { Locomotion } from '../movement.ts';
 import type { DangerZoneId } from '../world/layout.ts';
 import type { RoundPhase, RoundSettings, Standing } from './round.ts';
@@ -28,6 +29,8 @@ export interface Dino extends Locomotion {
   rankAtDeath: number;
   /** Place on the leaderboard (1 is the biggest), 0 while dead. Updated every tick. */
   rank: number;
+  /** Seconds of blurred sight left, from being spat at. */
+  blurredFor: number;
 }
 
 /** Meat comes in three sizes: an index into MEAT_SIZES (a scrap, a cut or a haunch). */
@@ -146,6 +149,12 @@ export type WorldEvent =
   | { readonly type: 'critterEaten'; readonly critterId: number; readonly dinoId: number }
   | { readonly type: 'critterSpawned'; readonly critterId: number }
   | { readonly type: 'bite'; readonly dinoId: number; readonly outcome: BiteOutcome }
+  /** A dinosaur used its ability (a pounce, spit, charge or roar). */
+  | { readonly type: 'ability'; readonly dinoId: number; readonly ability: AbilityId }
+  /** A spit hit this dinosaur in the eyes. */
+  | { readonly type: 'spat'; readonly targetId: number; readonly byId: number }
+  /** A roar stunned this dinosaur. */
+  | { readonly type: 'stunned'; readonly dinoId: number; readonly byId: number }
   | {
       readonly type: 'dinoKilled';
       readonly killerId: number;

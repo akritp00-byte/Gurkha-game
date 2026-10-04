@@ -1,6 +1,7 @@
 import type { ArraySchema, MapSchema, Schema } from '@colyseus/schema';
 import { type InputHandle, Predict, type Reconciler } from '@colyseus/sdk';
 import {
+  type AbilityId,
   CARCASS_KIND_CODES,
   CRITTERS,
   fromWireInput,
@@ -60,6 +61,8 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 /** The fields of your own dinosaur that prediction steps and the server corrects. */
 type Predicted = Mutable<NetDino>;
+/** The movement step also reports which ability it used; only the server acts on that. */
+type Stepped = Predicted & { abilityUsed: AbilityId | null };
 const PREDICTED_FIELDS = [
   'x',
   'z',
@@ -74,6 +77,9 @@ const PREDICTED_FIELDS = [
   'mass',
   'carrying',
   'alive',
+  'abilityCooldown',
+  'chargingFor',
+  'stunnedFor',
 ] as const satisfies readonly (keyof Predicted)[];
 
 type MirrorDino = Mutable<SessionDino>;
@@ -139,6 +145,7 @@ export class OnlineSession implements Session {
     sprint: false,
     bite: false,
     eat: false,
+    ability: false,
   };
   private reconciler: Reconciler<Predicted> | undefined;
   /** The synced instances behind each mirror, for interpolated reads. */
@@ -150,6 +157,7 @@ export class OnlineSession implements Session {
   private tickArrivedAt = 0;
   /** A click waits here until an input goes out with it. */
   private biteQueued = false;
+  private abilityQueued = false;
   /** The meteor has hit: the server holds everyone still, so prediction does too. */
   private frozen = false;
 
@@ -231,6 +239,7 @@ export class OnlineSession implements Session {
     // A click rides along with the first input that goes out after it.
     const due = this.predict.tick(nowMs);
     this.biteQueued ||= input.bite;
+    this.abilityQueued ||= input.ability;
     toWireInput(input, this.wire);
     for (let i = 0; i < due; i++) {
       this.input.data.turn = this.wire.turn;
@@ -238,7 +247,9 @@ export class OnlineSession implements Session {
       this.input.data.sprint = this.wire.sprint;
       this.input.data.eat = this.wire.eat;
       this.input.data.bite = this.biteQueued;
+      this.input.data.ability = this.abilityQueued;
       this.biteQueued = false;
+      this.abilityQueued = false;
       this.input.send();
     }
     this.mirror();
@@ -300,7 +311,7 @@ export class OnlineSession implements Session {
       // Exactly the server's movement step (shared/movement.ts), so prediction agrees with it.
       step: (context, state, command) => {
         if (!state.alive || this.frozen) return;
-        stepLocomotion(state, fromWireInput(command), context.dt);
+        stepLocomotion(state as Stepped, fromWireInput(command), context.dt);
       },
     });
   }
@@ -390,6 +401,10 @@ export class OnlineSession implements Session {
           winded: false,
           carrying: false,
           eating: false,
+          abilityCooldown: 0,
+          chargingFor: 0,
+          stunnedFor: 0,
+          blurredFor: 0,
         };
         this.dinos.set(id, mirror);
       }
@@ -410,6 +425,10 @@ export class OnlineSession implements Session {
       mirror.winded = source.winded;
       mirror.carrying = source.carrying;
       mirror.eating = source.eating;
+      mirror.abilityCooldown = source.abilityCooldown;
+      mirror.chargingFor = source.chargingFor;
+      mirror.stunnedFor = source.stunnedFor;
+      mirror.blurredFor = source.blurredFor;
       if (source.owner === this.room.sessionId) this.player = mirror;
     });
     for (const id of this.dinos.keys()) {
@@ -426,6 +445,8 @@ export class OnlineSession implements Session {
       this.player.speed = predicted.speed;
       this.player.stamina = predicted.stamina;
       this.player.winded = predicted.winded;
+      this.player.abilityCooldown = predicted.abilityCooldown;
+      this.player.chargingFor = predicted.chargingFor;
       this.player.sprinting = predicted.sprinting;
     }
   }

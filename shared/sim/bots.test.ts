@@ -38,6 +38,11 @@ function dino(id: number, x: number, z: number, mass = 10, heading = 0): Dino {
     massAtDeath: 0,
     rankAtDeath: 0,
     rank: 0,
+    abilityCooldown: 0,
+    chargingFor: 0,
+    stunnedFor: 0,
+    abilityUsed: null,
+    blurredFor: 0,
   };
 }
 
@@ -131,6 +136,42 @@ describe('bots', () => {
     expect(bitInReach).toBe(true);
     expect(brain.mode).toBe('hunt');
     expect(sprinted).toBe(false); // bots amble after prey: a player can always outrun them
+  });
+
+  it('pounce on prey just ahead, and roar at a crowd of smaller dinosaurs', () => {
+    const raptor = dino(1, 60, 0, 80);
+    const prey = dino(2, 60, 6, 15);
+    const brain = createBotBrain(steady, BOTS.skill.max);
+    let pounced = false;
+    drive(
+      brain,
+      raptor,
+      senses([raptor, prey]),
+      8,
+      () => pounced,
+      createRandom(4),
+      (input) => {
+        pounced ||= input.ability;
+      },
+    );
+    expect(pounced).toBe(true);
+
+    const rex = dino(3, 60, 0, 1600);
+    const crowd = [dino(4, 62, 4, 40), dino(5, 57, 3, 60), dino(6, 64, -2, 30)];
+    const rexBrain = createBotBrain(steady, BOTS.skill.max);
+    let roared = false;
+    drive(
+      rexBrain,
+      rex,
+      senses([rex, ...crowd]),
+      8,
+      () => roared,
+      createRandom(6),
+      (input) => {
+        roared ||= input.ability;
+      },
+    );
+    expect(roared).toBe(true);
   });
 
   it('stop hunting once they are big, and leave smaller dinosaurs alone', () => {

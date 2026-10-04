@@ -37,6 +37,12 @@ export interface SessionDino {
   /** Has a carcass in its mouth, and is eating this tick. */
   readonly carrying: boolean;
   readonly eating: boolean;
+  /** Seconds before its ability is ready again. */
+  readonly abilityCooldown: number;
+  /** Seconds of charging, of being stunned and of blurred sight left. */
+  readonly chargingFor: number;
+  readonly stunnedFor: number;
+  readonly blurredFor: number;
 }
 
 /** A carcass, carried in a mouth or lying on the ground. */

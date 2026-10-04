@@ -14,8 +14,8 @@ The brief, game rules and milestone plan are in [BUILD_PROMPT.md](BUILD_PROMPT.m
 | M3 Multiplayer                | Done    |
 | M4 Round loop                 | Done    |
 | M5 Art pass                   | Done    |
-| M6 Abilities, audio and juice | Next    |
-| M7 Interface polish           | Planned |
+| M6 Abilities, audio and juice | Done    |
+| M7 Interface polish           | Next    |
 | M8 Deployment                 | Planned |
 
 ## Quick start
@@ -37,15 +37,21 @@ Open http://localhost:5173 and you join a game on the local server as a tiny Com
 - Danger zones (the volcano's slopes and the ground round the tar pits, red on the minimap) are piled with meat worth 4–5× more, glowing gold, mostly big cuts and haunches: a haunch on the volcano is worth 40 scraps. Events there are bigger too. The bots mostly stay away.
 - Bigger dinosaurs are a little faster, so a lead keeps growing. Small ones turn tighter and can hide.
 - Small dinosaurs can hide in ferns. At 40 mass you evolve into a Velociraptor.
+- From the Velociraptor on, Q uses your species' ability:
+  - Velociraptor: **Pounce**, a leap forward (6 s cooldown).
+  - Dilophosaurus: **Spit** at whatever is in front of you: it blurs their view for 2 s (8 s).
+  - Allosaurus: **Charge**, fast and hard to steer, barging smaller dinosaurs aside and knocking their food loose (10 s).
+  - T-Rex: **Roar**, stunning every smaller dinosaur nearby for 1.5 s and making them drop their food (12 s).
+  - The bots use them too.
 - If you're caught, you hatch again 3 seconds later.
 - Each round lasts 20 minutes. For the last two the meteor is coming, and whoever is biggest when it hits wins. Then everyone starts again.
 - M turns the sound off and on.
 
-| Device  | Controls                                                                                                                                                  |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop | W or ↑ to run, A/D or ←/→ to turn, S or ↓ to stop, Shift to sprint; or hold the right mouse button to steer. Left click (or Space) to bite, hold E to eat |
-| Phone   | Drag anywhere on the left half of the screen (a joystick appears under your thumb); Sprint, Bite and Eat buttons on the right                             |
-| Any     | F3 opens the debug overlay: FPS, draw calls, ping and entity counts                                                                                       |
+| Device  | Controls                                                                                                                                                                                   |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Desktop | W or ↑ to run, A/D or ←/→ to turn, S or ↓ to stop, Shift to sprint; or hold the right mouse button to steer. Left click (or Space) to bite, hold E to eat, Q for your ability, M for sound |
+| Phone   | Drag anywhere on the left half of the screen (a joystick appears under your thumb); Sprint, Bite and Eat buttons on the right                                                              |
+| Any     | F3 opens the debug overlay: FPS, draw calls, ping and entity counts                                                                                                                        |
 
 Sprinting is 1.6× faster and runs on stamina (the yellow bar): about 4 seconds of it, refilling once you ease off.
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { roarRadius } from '../abilities/abilities.ts';
 import {
+  ABILITIES,
   CRITTERS,
   DANGER_ZONES,
   FOOD_MASS,
@@ -450,6 +452,7 @@ describe('a long random run', () => {
                 sprint: random() < 0.3,
                 bite: random() < 0.1,
                 eat: random() < 0.3,
+                ability: random() < 0.05,
               },
             ] as const,
         ),
@@ -565,5 +568,103 @@ describe('test hooks', () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: 'dinoKilled', killerId: bot.id, victimId: prey.id }),
     );
+  });
+});
+
+describe('abilities', () => {
+  const Q: PlayerInput = { ...IDLE_INPUT, ability: true };
+  const pressing = (dino: Dino, input: PlayerInput) => new Map([[dino.id, input]]);
+
+  it('spit blurs the nearest dinosaur in front, of any size', () => {
+    const world = emptyWorld();
+    const spitter = world.addPlayer('Spitter');
+    const target = world.addPlayer('Target');
+    const behind = world.addPlayer('Behind');
+    world.setMass(spitter, 200);
+    world.setMass(target, 900);
+    place(spitter, 60, 0, 0);
+    place(target, 60, 10);
+    place(behind, 60, -6);
+
+    const events = world.step(TICK, pressing(spitter, Q));
+
+    expect(events).toContainEqual({ type: 'ability', dinoId: spitter.id, ability: 'spit' });
+    expect(events).toContainEqual({ type: 'spat', targetId: target.id, byId: spitter.id });
+    expect(target.blurredFor).toBeGreaterThan(ABILITIES.spit.blurSeconds - 0.1);
+    expect(behind.blurredFor).toBe(0);
+    run(world, ABILITIES.spit.blurSeconds + 0.1);
+    expect(target.blurredFor).toBe(0);
+  });
+
+  it('a roar stuns every smaller dinosaur near the T-Rex, and makes them drop their food', () => {
+    const world = emptyWorld();
+    const rex = world.addPlayer('Rex');
+    const near = world.addPlayer('Near');
+    const far = world.addPlayer('Far');
+    const bigger = world.addPlayer('Bigger');
+    world.setMass(rex, 1600);
+    world.setMass(bigger, 2000);
+    world.setMass(near, 60);
+    place(rex, 60, 0, 0);
+    place(near, 60 - roarRadius(rex.mass) * 0.6, 0);
+    place(far, 60, roarRadius(rex.mass) + 10);
+    place(bigger, 60, -12);
+    world.startHappening('carcass', [], { x: near.x, z: near.z });
+
+    const events = world.step(TICK, pressing(rex, Q));
+
+    expect(events).toContainEqual({ type: 'stunned', dinoId: near.id, byId: rex.id });
+    expect(events.filter((e) => e.type === 'stunned')).toHaveLength(1);
+    expect(near.stunnedFor).toBeGreaterThan(1);
+    // Stunned: it can't move, bite or eat until it wears off.
+    const before = { x: near.x, z: near.z };
+    const tryEverything: PlayerInput = { ...IDLE_INPUT, throttle: 1, bite: true, eat: true };
+    run(world, 1, new Map([[near.id, tryEverything]]));
+    expect(near).toMatchObject(before);
+    expect(near.mass).toBe(60);
+    run(world, 1, new Map([[near.id, { ...IDLE_INPUT, throttle: 1 }]]));
+    expect(Math.hypot(near.x - before.x, near.z - before.z)).toBeGreaterThan(1);
+  });
+
+  it('a charge knocks smaller dinosaurs aside and loose of what they carry', () => {
+    const world = emptyWorld();
+    const charger = world.addPlayer('Charger');
+    const carrier = world.addPlayer('Carrier');
+    const victim = world.addPlayer('Victim');
+    world.setMass(charger, 600);
+    world.setMass(carrier, 120);
+    place(charger, 60, -10, 0);
+    place(carrier, 60, 0);
+    // Give the carrier something to lose: catch a hatchling first.
+    place(victim, 60, 1.6, Math.PI);
+    world.step(TICK, pressing(carrier, { ...IDLE_INPUT, bite: true }));
+    expect(carrier.carrying).toBe(true);
+    place(carrier, 60, 0, Math.PI / 2);
+
+    const events = stepUntil(
+      world,
+      ABILITIES.charge.seconds,
+      (e) => e.type === 'shoved',
+      pressing(charger, Q),
+    );
+
+    expect(events).toContainEqual({ type: 'shoved', dinoId: carrier.id, byId: charger.id });
+    expect(carrier.carrying).toBe(false);
+    expect(Math.hypot(carrier.pushX, carrier.pushZ)).toBeGreaterThan(
+      ABILITIES.charge.knockback * 0.7,
+    );
+  });
+
+  it("doesn't touch spawn-protected dinosaurs", () => {
+    const world = emptyWorld();
+    const rex = world.addPlayer('Rex');
+    const hatchling = world.addPlayer('Hatchling');
+    world.setMass(rex, 1600);
+    place(rex, 60, 0, 0);
+    place(hatchling, 60, 8);
+    hatchling.protectedFor = 3;
+    const events = world.step(TICK, pressing(rex, Q));
+    expect(events.filter((e) => e.type === 'stunned')).toHaveLength(0);
+    expect(hatchling.stunnedFor).toBe(0);
   });
 });

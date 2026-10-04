@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CARCASS, MOVEMENT, PUSH, SPRINT, STAMINA, WORLD } from './config.ts';
+import { ABILITIES, CARCASS, MOVEMENT, PUSH, SPRINT, STAMINA, WORLD } from './config.ts';
 import {
   canSprint,
   FULL_STAMINA,
@@ -42,7 +42,18 @@ function run(
 
 /** A dinosaur body for stepLocomotion, standing at (60, 0) facing +z with a full sprint bar. */
 function body(fields: Partial<Locomotion> = {}): Locomotion {
-  return { ...at(60, 0), ...FULL_STAMINA, sprinting: false, mass: 10, carrying: false, ...fields };
+  return {
+    ...at(60, 0),
+    ...FULL_STAMINA,
+    sprinting: false,
+    mass: 10,
+    carrying: false,
+    abilityCooldown: 0,
+    chargingFor: 0,
+    stunnedFor: 0,
+    abilityUsed: null,
+    ...fields,
+  };
 }
 
 function hold(dino: Locomotion, input: PlayerInput, seconds: number): Locomotion {
@@ -124,6 +135,7 @@ describe('stepMotion', () => {
       sprint: true,
       bite: true,
       eat: false,
+      ability: false,
     });
     const cheat = run(start, { ...RUN, throttle: 1000 }, 40);
     expect(cheat.speed).toBeCloseTo(speedForMass(10));
@@ -203,7 +215,7 @@ describe('carrying and eating', () => {
   });
 
   it('steps exactly the same way every time, so prediction matches the server', () => {
-    const input: PlayerInput = { turn: 0.4, throttle: 1, sprint: true, bite: false, eat: false };
+    const input: PlayerInput = { ...IDLE_INPUT, turn: 0.4, throttle: 1, sprint: true };
     expect(hold(body(), input, 6)).toEqual(hold(body(), input, 6));
   });
 });
@@ -231,5 +243,56 @@ describe('terrain and pushes', () => {
     expect(motion.pushX).toBe(0);
     // A push travels about speed / damping.
     expect(motion.x - 60).toBeCloseTo(18 / PUSH.damping, 0);
+  });
+});
+
+describe('abilities in the movement step', () => {
+  const Q: PlayerInput = { ...IDLE_INPUT, ability: true };
+
+  it('gives a hatchling nothing to use', () => {
+    const dino = body();
+    stepLocomotion(dino, Q, TICK);
+    expect(dino.abilityUsed).toBeNull();
+    expect(dino.abilityCooldown).toBe(0);
+  });
+
+  it('throws a pouncing Velociraptor forward, then makes it wait out the cooldown', () => {
+    const raptor = body({ mass: 60 });
+    stepLocomotion(raptor, Q, TICK);
+    expect(raptor.abilityUsed).toBe('pounce');
+    expect(raptor.pushZ).toBeGreaterThan(ABILITIES.pounce.speed * 0.8);
+    expect(raptor.abilityCooldown).toBe(ABILITIES.pounce.cooldownSeconds);
+    const start = raptor.z;
+    hold(raptor, IDLE_INPUT, 1.5);
+    expect(raptor.z - start).toBeGreaterThan(3); // a dash, standing start
+
+    stepLocomotion(raptor, Q, TICK);
+    expect(raptor.abilityUsed).toBeNull(); // still cooling down
+    hold(raptor, IDLE_INPUT, ABILITIES.pounce.cooldownSeconds);
+    stepLocomotion(raptor, Q, TICK);
+    expect(raptor.abilityUsed).toBe('pounce');
+  });
+
+  it('sends a charging Allosaurus forward fast, hard to steer', () => {
+    const charger = body({ mass: 600 });
+    stepLocomotion(charger, Q, TICK);
+    expect(charger.abilityUsed).toBe('charge');
+    hold(charger, { ...IDLE_INPUT, turn: 1 }, 0.8);
+    expect(charger.speed).toBeGreaterThan(speedForMass(600) * 1.4);
+    expect(charger.heading).toBeLessThan(0.8 * turnRateForMass(600) * 0.5);
+    hold(charger, IDLE_INPUT, ABILITIES.charge.seconds);
+    expect(charger.chargingFor).toBe(0);
+    expect(charger.speed).toBeLessThan(0.01); // nothing pressed: it stops once the charge ends
+  });
+
+  it('freezes a stunned dinosaur to the spot until the stun wears off', () => {
+    const stunned = body({ mass: 60, speed: speedForMass(60), stunnedFor: 1 });
+    hold(stunned, { ...IDLE_INPUT, throttle: 1, turn: 1, ability: true }, 0.5);
+    expect(stunned.speed).toBe(0);
+    expect(stunned.heading).toBe(0);
+    expect(stunned.abilityCooldown).toBe(0); // no ability while stunned either
+    hold(stunned, { ...IDLE_INPUT, throttle: 1 }, 1);
+    expect(stunned.stunnedFor).toBe(0);
+    expect(stunned.speed).toBeGreaterThan(0);
   });
 });

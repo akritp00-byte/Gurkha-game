@@ -65,6 +65,7 @@ export class OfflineSession implements Session {
   private readonly pending: SessionEvent[] = [];
   /** A click waits here for the next tick, even if this frame has none. */
   private biteQueued = false;
+  private abilityQueued = false;
   private accumulator = 0;
   private podiumRound = 0;
   private podium: readonly SessionStanding[] = [];
@@ -128,11 +129,17 @@ export class OfflineSession implements Session {
   advance(_nowMs: number, dt: number, input: PlayerInput): readonly SessionEvent[] {
     const events = this.pending.splice(0);
     this.biteQueued ||= input.bite;
+    this.abilityQueued ||= input.ability;
     this.accumulator += dt;
     let stepped = false;
     while (this.accumulator >= TICK_SECONDS) {
-      this.inputs.set(this.player.id, { ...input, bite: this.biteQueued });
+      this.inputs.set(this.player.id, {
+        ...input,
+        bite: this.biteQueued,
+        ability: this.abilityQueued,
+      });
       this.biteQueued = false;
+      this.abilityQueued = false;
       this.dinoHistory.capture(this.world.dinos.values());
       this.critterHistory.capture(this.world.critters);
       this.translate(this.world.step(TICK_SECONDS, this.inputs), events);
@@ -222,6 +229,9 @@ export class OfflineSession implements Session {
         case 'meteorWarning':
         case 'meteorImpact':
         case 'roundStarted':
+        case 'ability':
+        case 'spat':
+        case 'stunned':
           out.push(event);
           break;
         default:

@@ -51,6 +51,7 @@ export async function runLoadTest(options: LoadTestOptions): Promise<LoadTestRes
         sprint: style.sprint,
         bite: random() < 0.02,
         eat: random() < 0.2,
+        ability: random() < 0.01,
       });
     });
   }, 1000 / NETWORK.tickRate);

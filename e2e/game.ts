@@ -27,6 +27,11 @@ export interface GameState {
   dinosAlive: number;
   controls: string;
   round: { number: number; phase: 'playing' | 'impact' | 'podium'; clock: number };
+  ability: 'pounce' | 'spit' | 'charge' | 'roar' | null;
+  abilityCooldown: number;
+  chargingFor: number;
+  stunnedFor: number;
+  blurredFor: number;
 }
 
 /** A place on the leaderboard or podium. */
@@ -53,6 +58,8 @@ export interface OtherDino {
   z: number;
   mass: number;
   alive: boolean;
+  stunnedFor: number;
+  blurredFor: number;
 }
 
 interface DebugWindow {
