@@ -2,6 +2,51 @@
 
 One entry per milestone (BUILD_PROMPT.md §9), newest first.
 
+## M3: Multiplayer (2026-10-04)
+
+### Added
+
+- **An authoritative Colyseus server.** Each room runs the shared `GameWorld` at 20 ticks per second, bots included. Clients only send inputs (turn, throttle and sprint), one per tick, and the server decides everything else. A room holds up to 30 players. Bots keep it at 16 dinosaurs and leave as players join, the dead and the small first.
+- **Prediction and smoothing.**
+  - Your own dinosaur moves the moment you press a key. The client runs the same shared step function, then re-applies the inputs the server hasn't acknowledged yet on top of every server update (Colyseus' built-in reconciler). Corrections over 10 units snap instead of gliding.
+  - Everyone else, and the critters, are drawn 100 ms in the past, interpolated between server updates.
+- **Nearby-only updates.**
+  - Each client is sent only the dinosaurs, critters, eggs and meat within 120 units of its dinosaur. Things leave its view only 8 units further out, so nothing flickers at the edge.
+  - Small dinosaurs hidden in ferns are never sent to anyone more than 10 units away, so a modified client can't reveal them.
+  - Eggs and meat hardly move, so they're re-checked every 5 ticks.
+  - Bites and hatchings are only sent to players who can see them, and evolutions only to the player who evolved.
+- **Basic anti-cheat.**
+  - The server never takes a position from a client and clamps every input to its range.
+  - It applies one input per tick, so speed is capped. At most 6 inputs wait in line and the oldest are dropped, so a burst can't buy extra movement.
+  - It disconnects clients that send more than 60 messages a second.
+- **Joining and leaving.**
+  - `?name=` sets your name (up to 16 characters, otherwise "Player N"). `?room=` puts friends, and each browser test, in a room of their own.
+  - A dropped connection keeps its dinosaur, standing still, for 10 s while the client reconnects by itself. Closing the tab leaves at once.
+  - If the connection is lost for good, a notice offers to rejoin.
+  - If a client stops sending inputs (a hidden tab, a stalled connection), the server repeats its last input for 5 ticks to ride out a late packet, then its dinosaur stops.
+- **Offline fallback.** If no game room answers within 6 s, the game says so and starts the offline sandbox against bots instead. `?offline` plays offline on purpose. Builds without a game server configured stay offline, as before.
+- **A test mode for the server.** `pnpm dev` starts the server with `--test-commands`. It honours the `?seed=` and `?bots=` join options and the debug hooks that set mass, teleport and end spawn protection, so browser tests can stage a meeting. `pnpm start` ignores all of them.
+- **Server numbers.** A `/stats` route reports each room's players, dinosaurs, tick rate and time per tick. `pnpm loadtest` joins 30 headless players to a running server and reports whether it kept up.
+- **Tests.**
+  - The load test runs on every `pnpm check`. In a cloud container, 30 players plus 16 bots hold 20 ticks per second, and every client gets 20 updates a second. Ticks take 3–4 ms on average and under 16 ms at worst, against a budget of 50 ms.
+  - Server tests cover bots topping up a room, inputs moving the dinosaur and being acknowledged, the interest radius, fern hiding on the server, eating and respawning, a silent client stopping, reconnecting, flooding, and a production server ignoring test commands.
+  - The brief's two-tab Playwright test: two players in one room see each other move, then one eats the other. It checks the kill feed in both tabs, the death card and the respawn.
+
+### Changed
+
+- The game draws a session: either the offline sandbox (`OfflineSession`, running `GameWorld` in the browser as in M1 and M2) or a server game (`OnlineSession`).
+- Headings are no longer wrapped to ±π, so interpolation and corrections never see a 2π jump.
+- Inputs travel as small whole numbers (turn −127 to 127, throttle 0 to 255), so "no input" is exactly zero on both sides.
+- Browser tests open the offline sandbox (`?offline`) unless they test multiplayer.
+
+### Known issues
+
+- The top-10 leaderboard and the minimap dots aren't sent yet. They arrive with the round loop and its interface in M4.
+- Vent blasts aren't predicted, so your own dinosaur is thrown a moment late and corrected, rather than at once.
+- When an input arrives late, the server repeats the previous one and your dinosaur is corrected afterwards. On a poor connection that can show as a small nudge.
+- Dinosaurs still pass through each other when neither can eat the other.
+- Ping reads high in software-rendered browsers (test machines), because each frame takes hundreds of milliseconds there.
+
 ## M2: Core rules offline (2026-10-04)
 
 ### Added

@@ -11,6 +11,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@colyseus/schema": "^5.0.35",
+    "@colyseus/sdk": "^0.18.5",
     "@extinct/shared": "workspace:*",
     "three": "^0.186.1"
   },

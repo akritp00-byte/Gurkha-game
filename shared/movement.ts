@@ -1,12 +1,16 @@
 import { BITE, MASS, MOVEMENT, PUSH, SPRINT, WORLD } from './config.ts';
-import { clamp, wrapAngle } from './math.ts';
+import { clamp } from './math.ts';
 import { VOLCANO } from './world/layout.ts';
 
 /** Where a dinosaur is and how it's moving. Movement happens on the ground plane (x, z). */
 export interface Motion {
   readonly x: number;
   readonly z: number;
-  /** Facing in radians. 0 faces +z; increasing turns left (counter-clockwise seen from above). */
+  /**
+   * Facing in radians. 0 faces +z; increasing turns left (counter-clockwise seen from above).
+   * Never wrapped into ±π, so it changes smoothly: interpolation and prediction never see a
+   * jump of 2π. Compare headings with `angleDelta`.
+   */
   readonly heading: number;
   /** Current forward speed in units per second. */
   readonly speed: number;
@@ -58,6 +62,16 @@ export function canSprint(mass: number): boolean {
   return mass > MASS.minimum;
 }
 
+/** Whether a dinosaur sprints this tick: holding sprint while moving, with mass to burn. */
+export function isSprinting(input: MoveInput, mass: number): boolean {
+  return input.sprint && input.throttle > 0 && canSprint(mass);
+}
+
+/** Mass a sprinting dinosaur burns in `dt` seconds: 1.5% a second, never going below the minimum. */
+export function sprintBurn(mass: number, dt: number): number {
+  return Math.min(mass - MASS.minimum, mass * SPRINT.massLossPerSecond * dt);
+}
+
 /** Input from somewhere untrusted, such as the network: any field may hold anything. */
 export type RawInput = { readonly [K in keyof MoveInput]?: unknown };
 
@@ -89,7 +103,7 @@ export function stepMotion(
 ): Motion {
   const { turn, throttle, sprint } = sanitizeInput(input);
   const { mass, terrainFactor } = conditions;
-  const heading = wrapAngle(motion.heading + turn * turnRateForMass(mass) * dt);
+  const heading = motion.heading + turn * turnRateForMass(mass) * dt;
 
   const baseSpeed = speedForMass(mass);
   const sprintFactor = sprint && canSprint(mass) ? SPRINT.speedMultiplier : 1;

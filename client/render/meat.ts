@@ -1,4 +1,4 @@
-import { hash2, type Heightfield, heightAt, MEAT, type MeatChunk } from '@extinct/shared';
+import { hash2, type Heightfield, heightAt, MEAT } from '@extinct/shared';
 import {
   DodecahedronGeometry,
   Euler,
@@ -8,6 +8,7 @@ import {
   Quaternion,
   Vector3,
 } from 'three';
+import type { SessionMeat } from '../game/session.ts';
 
 /** New chunks pop in over this long, and old ones shrink away over the last seconds. */
 const POP_SECONDS = 0.15;
@@ -38,7 +39,7 @@ export class MeatView {
     this.mesh.count = 0;
   }
 
-  update(meat: ReadonlyMap<number, MeatChunk>): void {
+  update(meat: ReadonlyMap<number, SessionMeat>): void {
     let index = 0;
     for (const chunk of meat.values()) {
       const scale =

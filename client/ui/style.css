@@ -363,3 +363,44 @@ body {
   line-height: 1.4;
   text-align: center;
 }
+
+/* --- Notices and connecting ------------------------------------------------------ */
+
+.notice {
+  position: absolute;
+  top: calc(var(--safe-top) + 4px);
+  left: 50%;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border-radius: 12px;
+  background: rgb(40 24 12 / 0.85);
+  font-size: 0.85rem;
+  font-weight: 600;
+  pointer-events: auto;
+}
+
+.notice button {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #2a1a08;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.connecting {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  color: #1f3a2a;
+  font-size: 1.1rem;
+  font-weight: 800;
+}

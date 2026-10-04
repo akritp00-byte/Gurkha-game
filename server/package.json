@@ -5,9 +5,10 @@
   "description": "Authoritative Colyseus game server.",
   "type": "module",
   "scripts": {
-    "dev": "node --watch index.ts",
+    "dev": "node --watch index.ts --test-commands",
     "start": "node index.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "loadtest": "node loadtest.ts"
   },
   "dependencies": {
     "@colyseus/core": "^0.18.18",
@@ -16,6 +17,7 @@
     "@extinct/shared": "workspace:*"
   },
   "devDependencies": {
+    "@colyseus/sdk": "^0.18.5",
     "@types/node": "catalog:",
     "typescript": "catalog:"
   }

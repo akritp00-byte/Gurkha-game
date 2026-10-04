@@ -2,6 +2,7 @@ export * from './config.ts';
 export * from './eating.ts';
 export * from './math.ts';
 export * from './movement.ts';
+export * from './net.ts';
 export * from './noise.ts';
 export * from './random.ts';
 export * from './sim/bots.ts';

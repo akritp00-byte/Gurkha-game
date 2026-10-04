@@ -1,4 +1,3 @@
-import type { Dino } from '@extinct/shared';
 import type { Object3D } from 'three';
 import { DinoView } from './DinoView.ts';
 
@@ -12,7 +11,7 @@ export class DinoCrowd {
   }
 
   /** The view of a dinosaur, created the first time it's asked for. */
-  viewOf(dino: Dino): DinoView {
+  viewOf(dino: { readonly id: number; readonly mass: number }): DinoView {
     let view = this.views.get(dino.id);
     if (!view) {
       view = new DinoView(dino.mass);

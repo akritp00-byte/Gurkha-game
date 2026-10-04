@@ -1,4 +1,4 @@
-import { type Critter, CRITTERS, type Heightfield, heightAt } from '@extinct/shared';
+import { CRITTERS, type Heightfield, heightAt } from '@extinct/shared';
 import {
   ConeGeometry,
   Euler,
@@ -9,7 +9,8 @@ import {
   Quaternion,
   Vector3,
 } from 'three';
-import type { PoseHistory, PoseSample } from '../game/poseHistory.ts';
+import type { PoseSample } from '../game/poseHistory.ts';
+import type { SessionCritter } from '../game/session.ts';
 import { merge, paint } from './geometry.ts';
 
 const FUR = 0x9a7452;
@@ -65,7 +66,12 @@ export class CrittersView {
     this.hopPhase = new Float32Array(count);
   }
 
-  update(dt: number, critters: readonly Critter[], history: PoseHistory, alpha: number): void {
+  /** Draw every critter where `poseOf` says it is this frame. */
+  update(
+    dt: number,
+    critters: readonly SessionCritter[],
+    poseOf: (critter: SessionCritter, out: PoseSample) => PoseSample,
+  ): void {
     for (const critter of critters) {
       const index = critter.id;
       if (!critter.alive) {
@@ -73,7 +79,7 @@ export class CrittersView {
         this.mesh.setMatrixAt(index, matrix);
         continue;
       }
-      history.blend(critter, alpha, pose);
+      poseOf(critter, pose);
       this.hopPhase[index] = (this.hopPhase[index] + pose.speed * dt * HOPS_PER_UNIT) % 1;
       const hop = Math.abs(Math.sin(this.hopPhase[index] * Math.PI)) * HOP_HEIGHT;
       const moving = Math.min(pose.speed / CRITTERS.wanderSpeed, 1);

@@ -2,6 +2,7 @@ import { expect, type Page } from '@playwright/test';
 
 /** What `window.__extinct.state()` reports (see DebugState in client/game/Game.ts). */
 export interface GameState {
+  mode: 'offline' | 'online';
   x: number;
   z: number;
   heading: number;
@@ -20,9 +21,19 @@ export interface GameState {
   controls: string;
 }
 
+export interface OtherDino {
+  id: number;
+  name: string;
+  x: number;
+  z: number;
+  mass: number;
+  alive: boolean;
+}
+
 interface DebugWindow {
   __extinct: {
     state(): GameState;
+    others(): OtherDino[];
     stats(): { fps: number; cpuMs: number; drawCalls: number; triangles: number };
     setMass(mass: number): void;
     placeEggAhead(distance: number): void;
@@ -38,12 +49,36 @@ interface DebugWindow {
 }
 
 /**
- * Open the game with a fixed island seed and wait for the first rendered frame. By default the
- * island has no bots, so nothing wanders in and eats the dinosaur mid-test.
+ * Open the offline sandbox with a fixed island seed and wait for the first rendered frame. By
+ * default the island has no bots, so nothing wanders in and eats the dinosaur mid-test.
  */
 export async function openGame(page: Page, query = '&bots=0'): Promise<void> {
-  await page.goto(`/?seed=42${query}`);
+  await page.goto(`/?offline&seed=42${query}`);
   await expect(page.locator('#game')).toHaveAttribute('data-ready', 'true');
+}
+
+/**
+ * Join a multiplayer game on the dev server (which accepts test commands), in a room of its
+ * own with no bots unless asked, and wait until the player's dinosaur is on screen.
+ */
+export async function openOnlineGame(
+  page: Page,
+  options: { room: string; name: string; bots?: number },
+): Promise<void> {
+  const query = new URLSearchParams({
+    room: options.room,
+    name: options.name,
+    bots: String(options.bots ?? 0),
+    seed: '42',
+  });
+  await page.goto(`/?${query.toString()}`);
+  await expect(page.locator('#game')).toHaveAttribute('data-ready', 'true', { timeout: 30_000 });
+  expect((await gameState(page)).mode).toBe('online');
+}
+
+/** Other dinosaurs this page can see. */
+export function otherDinos(page: Page): Promise<OtherDino[]> {
+  return page.evaluate(() => (window as unknown as DebugWindow).__extinct.others());
 }
 
 export function gameState(page: Page): Promise<GameState> {

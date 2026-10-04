@@ -13,11 +13,12 @@ import {
 import { biteReach, biteZone, bodyRadius, massGained, outweighs, zoneTouches } from '../eating.ts';
 import { angleDelta, clamp, TAU, wrapAngle } from '../math.ts';
 import {
-  canSprint,
   IDLE_INPUT,
+  isSprinting,
   keepOnIsland,
   type MoveInput,
   sanitizeInput,
+  sprintBurn,
   stepMotion,
 } from '../movement.ts';
 import { createRandom, type Random, randomRange } from '../random.ts';
@@ -274,7 +275,7 @@ export class GameWorld implements WorldSenses {
       dino.protectedFor = countDown(dino.protectedFor, dt);
       dino.meatCooldown = countDown(dino.meatCooldown, dt);
       const input = sanitizeInput(inputs.get(dino.id) ?? IDLE_INPUT);
-      dino.sprinting = input.sprint && input.throttle > 0 && canSprint(dino.mass);
+      dino.sprinting = isSprinting(input, dino.mass);
       const next = stepMotion(
         dino,
         input,
@@ -293,7 +294,7 @@ export class GameWorld implements WorldSenses {
 
   /** Sprinting burns mass, which falls behind the dinosaur as meat. */
   private burnSprint(dino: Dino, dt: number, events: WorldEvent[]): void {
-    const burnt = Math.min(dino.mass - MASS.minimum, dino.mass * SPRINT.massLossPerSecond * dt);
+    const burnt = sprintBurn(dino.mass, dt);
     this.setMass(dino, dino.mass - burnt, events);
     dino.meatOwed = Math.min(dino.meatOwed + burnt, 2 * FOOD_MASS.meat);
     if (dino.meatOwed < FOOD_MASS.meat || dino.meatCooldown > 0) return;

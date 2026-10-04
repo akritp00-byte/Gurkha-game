@@ -10,6 +10,7 @@ pnpm dev                     # client http://localhost:5173 + game server http:/
 pnpm check                   # format check, lint, type-check, unit tests: run before every commit
 pnpm build                   # production client build (CI runs it too)
 pnpm test:e2e                # Playwright smoke tests; starts `pnpm dev` itself (or reuses a running one locally)
+pnpm loadtest                # 30 headless players against the running server (`pnpm dev`)
 pnpm vitest run --project server        # one test project (shared | server | client)
 pnpm vitest run shared/config.test.ts   # one test file
 pnpm format                  # fix formatting
@@ -28,15 +29,23 @@ pnpm format                  # fix formatting
   - `sim/entities.ts`: the entity and event types. `sim/bots.ts`: bot brains (`botInput`). `sim/vents.ts`: the vent clock. `sim/names.ts`: bot names.
   - `world/layout.ts`: level design, meaning where the volcano, vents, river, tar pits and fern patches are.
   - `world/terrain.ts`: island heights and zones, including `terrainSpeedFactor`. `islandHeightfield()` is built once; `heightAt()` matches the rendered triangles exactly.
-- **`server/`** is the authoritative Colyseus 0.18 server. `index.ts` is the entry point. `app.ts` builds the server without binding a port, so tests can start it on port 0. `env.ts` loads the repo-root `.env`. Clients only ever send inputs. Never trust a position sent by a client.
+  - `net.ts`: the network protocol shared by server and client: the room name, join options, wire inputs (`toWireInput` / `fromWireInput`), event messages, test commands, `cleanName`, and the shapes of the synced state (`NetDino`, ...).
+- **`server/`** is the authoritative Colyseus 0.18 server. `index.ts` is the entry point. `app.ts` builds the server without binding a port, so tests can start it on port 0, and serves `/health` and `/stats`. `env.ts` loads the repo-root `.env`. Clients only ever send inputs. Never trust a position sent by a client.
+  - `rooms/GameRoom.ts`: one game room. It runs `GameWorld` on Colyseus' fixed timestep, takes one input per player per tick from the input buffer, tops the room up with bots, mirrors the world into the schema, filters each client's `StateView` by distance and fern hiding, and sends events. `TestGameRoom` adds the test commands.
+  - `rooms/schema.ts`: the synced state, built with `schema()`. A compile-time check keeps it in line with the `Net*` shapes in `shared/net.ts`.
+  - `testing/`: `harness.ts` (start a server on a free port, `TestClient`, `waitFor`) and `loadTest.ts`. `loadtest.ts` is the `pnpm loadtest` command.
+  - `--test-commands` (passed by `pnpm dev`, never by `pnpm start`) makes the server honour test commands and the `seed` and `bots` join options.
 - **`client/`** is Three.js + Vite, with no game engine. `assets/` and `audio/` come later.
-  - `game/Game.ts`: the offline sandbox. It samples input, steps `GameWorld` (with bots) at a fixed `NETWORK.tickRate` (the same rate as the server), turns events into effects and renders everything interpolated between ticks (`poseHistory.ts`).
+  - `game/Game.ts`: the game loop. It samples input, advances a `Session` (`game/session.ts`), turns its events into effects and renders it. A session is either `game/OfflineSession.ts`, which steps `GameWorld` (with bots) in the browser at `NETWORK.tickRate` and interpolates between ticks (`poseHistory.ts`), or `net/OnlineSession.ts`.
   - `input/`: keyboard, held-mouse and touch-joystick steering, plus sprint (Shift or the touch button). The pure mappings live in `steering.ts`, so they can be unit tested.
   - `render/`: `terrain.ts`, `vegetation.ts`, `eggs.ts`, `meat.ts`, `critters.ts` and `threatRings.ts` (each one instanced draw call), `vents.ts`, `environment.ts` (sky, fog, sun shadows that follow the player), `cameraRig.ts`, `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each (`crowd.ts` keeps one view per dinosaur).
   - `ui/`: HUD with status chips, name tags, kill feed, death card, F3 debug overlay, controls hint and CSS.
-  - `net/`: talking to the game server.
+  - `net/`: `connect.ts` joins a room (or times out, and `main.ts` falls back to offline play). `OnlineSession.ts` sends inputs, predicts your own dinosaur with Colyseus' `Predict` reconciler and the shared step function, and interpolates everything else.
   - `dev/`: developer pages that aren't part of the build, e.g. `/dev/dinos.html`.
-- **Multiplayer (from M3):** the client sends inputs (sequence number, direction, sprint, ability). The server simulates at `NETWORK.tickRate` and sends state patches filtered to `NETWORK.interestRadius`, with fern hiding enforced there. The client predicts its own dino with the shared step function and reconciles against the server. Other dinos are interpolated `NETWORK.interpolationDelayMs` in the past.
+- **Multiplayer:** the client sends one input per tick (turn, throttle, sprint; abilities come in M6), as small integers. The server simulates at `NETWORK.tickRate`, consumes one input per player per tick, and sends a patch after every tick, filtered to `NETWORK.interestRadius` with fern hiding enforced there. The client predicts its own dino with the shared step function and reconciles against the server. Other dinos are interpolated `NETWORK.interpolationDelayMs` in the past.
+  - Anything the client predicts must step exactly as `GameWorld` does. If you change how the player's dinosaur moves, change `stepOwnDinosaur` in `OnlineSession.ts` to match.
+  - Headings are continuous (never wrapped), so interpolation and reconciliation don't see 2π jumps.
+  - Colyseus pitfall: set `patchRate = null` after `setFixedTimestep`, never before, or a second clock starves the fixed timestep.
 
 ## Conventions
 
@@ -56,8 +65,9 @@ pnpm format                  # fix formatting
   - Frame rates measured there mean nothing. Judge performance by the overlay's CPU time, draw calls and triangles, and check FPS on real hardware.
   - Anything integrated over frame time must stay stable at long frames: frames are clamped to 0.25 s, and springs are sub-stepped (see `cameraRig.ts`).
 - **Debug hooks:**
-  - URL options: `?seed=` (repeatable island and spawn), `?bots=` (default 15), `?mass=`, `?debug` (open the F3 overlay) and `?quality=low|medium|high`.
-  - `window.__extinct` provides `state()`, `stats()`, `bots()`, `setMass()`, `placeEggAhead()`, `placeDinoAhead()`, `teleport()` and `endProtection()` for tests and the console. Debug hooks only ever touch the offline sandbox, never the server.
+  - URL options: `?offline` (the sandbox, no server), `?name=`, `?room=` (a room of its own), `?seed=` (repeatable island and spawn), `?bots=` (offline default 15), `?mass=` (offline only), `?debug` (open the F3 overlay) and `?quality=low|medium|high`. Online, only a test server honours `?seed=` and `?bots=`, when they come with the join that creates the room.
+  - Most browser tests play offline (`openGame` adds `?offline`). `openOnlineGame(page, { room, name })` joins the dev server instead, in a room of its own.
+  - `window.__extinct` provides `state()`, `others()`, `stats()`, `bots()`, `setMass()`, `placeEggAhead()`, `placeDinoAhead()`, `teleport()` and `endProtection()` for tests and the console. Online, `setMass()`, `teleport()` and `endProtection()` become test commands, which only a server started with `--test-commands` (`pnpm dev`) obeys. Production servers ignore them. `placeEggAhead()`, `placeDinoAhead()` and `bots()` are offline only.
 - **Dependencies:** as few as possible. Explain why before adding one. Ask before changing the stack, buying assets or signing up for paid services.
 - **Secrets:** `.env` is git-ignored. Update `.env.example` whenever you add a variable. Browser-visible variables must start with `VITE_` and must never hold secrets.
 - **Assets and sounds:** CC0 or properly licensed only, recorded in `CREDITS.md` before committing.

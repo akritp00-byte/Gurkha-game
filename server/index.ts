@@ -12,5 +12,10 @@ function readPort(value: string | undefined): number {
 }
 
 const port = readPort(process.env.PORT);
-await createGameServer().listen(port);
-console.log(`[server] listening on http://localhost:${port} (health check: /health)`);
+// `pnpm dev` passes --test-commands so browser tests can set up scenes; production never does.
+const testCommands = process.argv.includes('--test-commands');
+await createGameServer({ testCommands }).listen(port);
+console.log(
+  `[server] listening on http://localhost:${port} (health check: /health)` +
+    (testCommands ? ' with test commands' : ''),
+);

@@ -267,6 +267,27 @@ export const NETWORK = {
   leaderboardSize: 10,
   /** Port the game server listens on (HTTP and WebSocket) unless PORT is set. */
   defaultServerPort: 2567,
+  /** Entities leave a client's view only beyond interestRadius plus this, so nothing flickers at the edge. */
+  interestHysteresis: 8,
+  /** Eggs and meat hardly move, so each client's view of them is refreshed only every this many ticks. */
+  slowViewRefreshTicks: 5,
+  /**
+   * Inputs the server queues per client before dropping the oldest: at most this many ticks
+   * of extra latency, and a burst can't buy extra movement (basic anti-cheat).
+   */
+  inputBufferSize: 6,
+  /**
+   * A client's input that's late (jitter) is covered by repeating its last one, for at most
+   * this many ticks. After that (a hidden tab, a stalled connection) its dinosaur stops.
+   */
+  inputGraceTicks: 5,
+  /** Clients sending more messages than this per second are disconnected (basic anti-cheat). */
+  maxMessagesPerSecond: 60,
+  /** A dropped connection keeps its dinosaur (standing still) this long, waiting for a reconnect. */
+  reconnectSeconds: 10,
+  /** Corrections to your own dinosaur bigger than this (in units) are teleports: snap, don't glide. */
+  snapDistance: 10,
+  maxNameLength: 16,
 } as const;
 
 /** Performance budget (BUILD_PROMPT.md §6). Targets for tests and tooling, not runtime tuning. */

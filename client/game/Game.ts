@@ -3,18 +3,14 @@ import {
   canSee,
   canSprint,
   clamp,
-  type Dino,
+  CRITTERS,
   EFFECTS,
-  GameWorld,
   heightAt,
   type Heightfield,
   IDLE_INPUT,
   isHiddenInFerns,
-  islandHeightfield,
-  keepOnIsland,
   MASS,
   type MoveInput,
-  NETWORK,
   ROOM,
   speedForMass,
   TAU,
@@ -23,7 +19,6 @@ import {
   tierForMass,
   VOLCANO_VENTS,
   WORLD,
-  type WorldEvent,
 } from '@extinct/shared';
 import {
   type Fog,
@@ -52,10 +47,9 @@ import { ControlsHint } from '../ui/hint.ts';
 import { Hud, type StatusChip } from '../ui/hud.ts';
 import { KillFeed } from '../ui/killFeed.ts';
 import { NameTags } from '../ui/nameTags.ts';
-import { PoseHistory, type PoseSample } from './poseHistory.ts';
+import type { PoseSample } from './poseHistory.ts';
+import type { BotSummary, Session, SessionDino, SessionEvent } from './session.ts';
 
-/** The simulation runs at the server's tick rate, so offline play feels like online play. */
-const TICK_SECONDS = 1 / NETWORK.tickRate;
 /** Longer frames (a stalled or backgrounded tab) are clamped so the simulation never spirals. */
 const MAX_FRAME_SECONDS = 0.25;
 /** Name tags show on dinosaurs within this distance of you, plus a little more per body scale. */
@@ -63,20 +57,17 @@ const NAME_TAG_DISTANCE = 45;
 const NAME_TAG_DISTANCE_PER_SCALE = 8;
 /** Name tags float this high above the ground, in body scales. */
 const NAME_TAG_HEIGHT = 1.1;
-const PLAYER_NAME = 'You';
 
 export interface GameOptions {
   readonly quality: QualitySettings;
-  readonly seed: number;
-  readonly startMass: number;
-  /** Bots sharing the island with the player. */
-  readonly bots: number;
+  readonly field: Heightfield;
   readonly showDebug: boolean;
   readonly touchFirst: boolean;
 }
 
 /** What `window.__extinct.state()` reports about the player. */
 export interface DebugState {
+  mode: 'offline' | 'online';
   x: number;
   z: number;
   heading: number;
@@ -96,51 +87,54 @@ export interface DebugState {
   controls: string;
 }
 
-export interface BotSummary {
+/** Another dinosaur this client can see, as `window.__extinct.others()` reports it. */
+export interface OtherDino {
   id: number;
   name: string;
   x: number;
   z: number;
   mass: number;
   alive: boolean;
-  mode: string;
 }
 
-/** Peek at and poke the offline sandbox from tests and the browser console, as `window.__extinct`. */
+/**
+ * Peek at and poke the game from tests and the browser console, as `window.__extinct`. The
+ * pokes (setMass and friends) act on the offline sandbox, or online on a test server only.
+ */
 export interface DebugApi {
   state(): DebugState;
   stats(): { fps: number; cpuMs: number; drawCalls: number; triangles: number };
+  /** Every other dinosaur this client can see. */
+  others(): OtherDino[];
   bots(): BotSummary[];
   /** Set the player's mass (to try out other tiers). */
   setMass(mass: number): void;
-  /** Move an egg to this many units in front of the player. */
-  placeEggAhead(distance: number): void;
-  /**
-   * Put a bot of `mass` this far in front of the player (and `side` units to its right), facing
-   * `toward` the player or `away` from it, with no spawn protection. It takes the bot furthest
-   * from the player, so repeated calls place different bots, and adds one if there are none.
-   * Returns the bot's id.
-   */
-  placeDinoAhead(mass: number, distance: number, facing: 'toward' | 'away', side?: number): number;
   /** Move the player (heading 0 faces +z). */
   teleport(x: number, z: number, heading?: number): void;
   /** End the player's spawn protection now. */
   endProtection(): void;
+  /** Offline only: move an egg to this many units in front of the player. */
+  placeEggAhead(distance: number): void;
+  /**
+   * Offline only: put a bot of `mass` this far in front of the player (and `side` units to its
+   * right), facing `toward` the player or `away` from it, with no spawn protection. It takes the
+   * bot furthest from the player, so repeated calls place different bots. Returns its id.
+   */
+  placeDinoAhead(mass: number, distance: number, facing: 'toward' | 'away', side?: number): number;
 }
 
 /**
- * The offline sandbox: the island, the player, bots, food and every rule, all running in the
- * browser. The simulation itself (GameWorld) is shared code; this class feeds it input and draws
- * the result.
+ * The game on screen: island, dinosaurs, food, camera, controls and interface. The world comes
+ * from a Session, either the shared simulation running in the browser or a game server; this
+ * class feeds it input, draws what it holds and turns its events into effects.
  */
 export class Game {
   readonly debugApi: DebugApi;
+  private readonly session: Session;
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: WebGLRenderer;
   private readonly scene = new Scene();
   private readonly field: Heightfield;
-  private readonly world: GameWorld;
-  private readonly player: Dino;
   private readonly quality: QualitySettings;
   private readonly cameraRig: CameraRig;
   private readonly sun: Sun;
@@ -161,12 +155,8 @@ export class Game {
   private readonly killFeed: KillFeed;
   private readonly deathScreen: DeathScreen;
 
-  private readonly dinoHistory = new PoseHistory();
-  private readonly critterHistory = new PoseHistory();
   private readonly poses = new Map<number, PoseSample>();
-  private readonly inputs = new Map<number, MoveInput>();
   private input: MoveInput = IDLE_INPUT;
-  private accumulator = 0;
   private lastFrameMs: number | undefined;
   /** The picture freezes until this time (ms) after you eat a dinosaur. */
   private hitstopUntil = 0;
@@ -181,9 +171,11 @@ export class Game {
   private cpuMs = 0;
   private rendered = false;
 
-  constructor(canvas: HTMLCanvasElement, ui: HTMLElement, options: GameOptions) {
+  constructor(canvas: HTMLCanvasElement, ui: HTMLElement, session: Session, options: GameOptions) {
+    this.session = session;
     this.canvas = canvas;
     this.quality = options.quality;
+    this.field = options.field;
     this.renderer = new WebGLRenderer({
       canvas,
       antialias: options.quality.antialias,
@@ -193,21 +185,15 @@ export class Game {
     this.renderer.shadowMap.enabled = options.quality.shadows;
     this.renderer.shadowMap.type = PCFShadowMap;
 
-    this.field = islandHeightfield();
-    this.world = new GameWorld({ seed: options.seed, terrain: this.field });
-    this.player = this.world.addPlayer(PLAYER_NAME);
-    if (options.startMass !== this.player.mass) this.world.setMass(this.player, options.startMass);
-    for (let i = 0; i < options.bots; i++) this.world.addBot();
-
     this.fog = createFog();
     this.scene.fog = this.fog;
     this.sky = createSky();
     this.sun = new Sun(this.scene, options.quality);
     this.pools = createPools();
-    this.eggs = new EggsView(this.world.eggs, this.field);
+    this.eggs = new EggsView(session.eggs, this.field);
     this.rings = new ThreatRings(this.field, ROOM.maxPlayers);
     this.meat = new MeatView(this.field);
-    this.critters = new CrittersView(this.field, this.world.critters.length);
+    this.critters = new CrittersView(this.field, CRITTERS.count);
     this.vents = new VentsView(this.field);
     this.scene.add(
       this.sky,
@@ -257,116 +243,105 @@ export class Game {
     this.lastFrameMs = timeMs;
 
     this.input = this.controls.sample(this.dinoOnScreen);
-    this.inputs.set(this.player.id, this.input);
-    this.accumulator += dt;
-    while (this.accumulator >= TICK_SECONDS) {
-      this.dinoHistory.capture(this.world.dinos.values());
-      this.critterHistory.capture(this.world.critters);
-      this.handle(this.world.step(TICK_SECONDS, this.inputs), timeMs);
-      this.accumulator -= TICK_SECONDS;
-    }
+    this.handle(this.session.advance(timeMs, dt, this.input), timeMs);
 
     // Hitstop: the picture holds still for a moment while the game carries on underneath.
-    if (timeMs >= this.hitstopUntil) this.render(dt, this.accumulator / TICK_SECONDS, timeMs);
+    const player = this.session.player;
+    if (player && timeMs >= this.hitstopUntil) this.render(dt, timeMs, player);
     this.cpuMs += (performance.now() - frameStart - this.cpuMs) * 0.1;
     this.countFrame(timeMs);
-    this.updateInterface(timeMs);
+    if (player) this.updateInterface(timeMs, player);
   };
 
-  // --- Simulation events --------------------------------------------------------
+  // --- Events -----------------------------------------------------------------------
 
-  private handle(events: readonly WorldEvent[], timeMs: number): void {
+  private handle(events: readonly SessionEvent[], timeMs: number): void {
+    const player = this.session.player;
     for (const event of events) {
       switch (event.type) {
         case 'eggEaten':
           this.eggs.eggEaten(event.slot);
-          this.chomp(event.dinoId, CAMERA.bitePunch);
           break;
         case 'eggSpawned':
           this.eggs.eggSpawned(event.slot);
           break;
-        case 'meatEaten':
-        case 'critterEaten':
-          this.chomp(event.dinoId, CAMERA.bitePunch);
+        case 'bite':
+          this.crowd.find(event.dinoId)?.bite();
+          if (event.dinoId === player?.id) this.cameraRig.punch(CAMERA.bitePunch);
           break;
         case 'dinoEaten':
-          this.dinoEaten(event.eaterId, event.victimId, timeMs);
+          this.dinoEaten(event, timeMs);
           break;
-        case 'dinoSpawned':
-          this.dinoHistory.forget(event.dinoId);
-          this.crowd.find(event.dinoId)?.snap(MASS.start);
-          if (event.dinoId === this.player.id) this.deathScreen.hide();
+        case 'dinoSpawned': {
+          const dino = this.session.dinos.get(event.dinoId);
+          this.crowd.find(event.dinoId)?.snap(dino?.mass ?? MASS.start);
+          if (event.dinoId === player?.id) this.deathScreen.hide();
           break;
+        }
         case 'tierChanged':
-          if (event.dinoId === this.player.id && event.tier > event.previousTier) {
+          if (event.dinoId === player?.id && event.tier > event.previousTier) {
             this.cameraRig.punch(CAMERA.evolvePunch);
           }
           break;
         case 'ventErupted': {
+          if (!player?.alive) break;
           const vent = VOLCANO_VENTS[event.vent];
-          const distance = Math.hypot(vent.x - this.player.x, vent.z - this.player.z);
-          if (this.player.alive && distance < CAMERA.ventPunchDistance) {
+          const distance = Math.hypot(vent.x - player.x, vent.z - player.z);
+          if (distance < CAMERA.ventPunchDistance) {
             this.cameraRig.punch(CAMERA.ventPunch * (1 - distance / CAMERA.ventPunchDistance));
           }
           break;
         }
-        default:
-          break; // the views read meat, critters and vents straight from the world
       }
     }
   }
 
-  /** Someone ate something: play the bite, and punch the camera if it was us. */
-  private chomp(dinoId: number, punch: number): void {
-    this.crowd.find(dinoId)?.bite();
-    if (dinoId === this.player.id) this.cameraRig.punch(punch);
-  }
-
-  private dinoEaten(eaterId: number, victimId: number, timeMs: number): void {
-    const eater = this.world.dinos.get(eaterId);
-    const victim = this.world.dinos.get(victimId);
-    if (!eater || !victim) return;
-    this.crowd.find(eaterId)?.bite();
-    const involvesYou = eater === this.player || victim === this.player;
-    this.killFeed.add(timeMs, eater.name, victim.name, involvesYou);
-    if (eater === this.player) {
+  private dinoEaten(event: Extract<SessionEvent, { type: 'dinoEaten' }>, timeMs: number): void {
+    const playerId = this.session.player?.id;
+    this.crowd.find(event.eaterId)?.bite();
+    const involvesYou = event.eaterId === playerId || event.victimId === playerId;
+    const eaterName = event.eaterId === playerId ? 'You' : event.eaterName;
+    const victimName = event.victimId === playerId ? 'You' : event.victimName;
+    this.killFeed.add(timeMs, eaterName, victimName, involvesYou);
+    if (event.eaterId === playerId) {
       this.cameraRig.punch(CAMERA.killPunch);
       this.hitstopUntil = timeMs + EFFECTS.hitstopSeconds * 1000;
     }
-    if (victim === this.player) {
+    if (event.victimId === playerId) {
       this.deathScreen.show({
-        eater: `${eater.name} the ${tierForMass(eater.mass).species}`,
-        massReached: victim.massAtDeath,
-        speciesReached: tierForMass(victim.massAtDeath).species,
+        eater: `${event.eaterName} the ${tierForMass(event.eaterMass).species}`,
+        massReached: event.victimMass,
+        speciesReached: tierForMass(event.victimMass).species,
       });
     }
   }
 
   // --- Drawing ---------------------------------------------------------------------
 
-  private render(dt: number, alpha: number, timeMs: number): void {
+  private render(dt: number, timeMs: number, player: SessionDino): void {
     const time = timeMs / 1000;
-    const player = this.player;
-    this.crowd.prune((id) => this.world.dinos.has(id));
+    const session = this.session;
+    this.crowd.prune((id) => session.dinos.has(id));
+    for (const id of this.poses.keys()) if (!session.dinos.has(id)) this.poses.delete(id);
 
-    // Draw everything between the last two simulation ticks so movement stays smooth.
-    for (const dino of this.world.dinos.values()) {
+    // Where to draw everyone this frame: between ticks, or predicted for your own dinosaur.
+    for (const dino of session.dinos.values()) {
       let pose = this.poses.get(dino.id);
       if (!pose) {
         pose = { x: 0, z: 0, heading: 0, speed: 0 };
         this.poses.set(dino.id, pose);
       }
-      this.dinoHistory.blend(dino, alpha, pose);
+      session.dinoPose(dino, pose);
     }
 
     // The camera follows you, or while you're dead, whoever ate you.
-    const eater = player.eatenBy === null ? undefined : this.world.dinos.get(player.eatenBy);
+    const eater = player.eatenBy === null ? undefined : session.dinos.get(player.eatenBy);
     const subject = !player.alive && eater?.alive ? eater : player;
     const subjectPose = this.poses.get(subject.id) ?? subject;
 
     this.rings.begin();
     const pulse = 0.5 + 0.5 * Math.cos(time * EFFECTS.protectionBlinkHz * TAU);
-    for (const dino of this.world.dinos.values()) {
+    for (const dino of session.dinos.values()) {
       const view = this.crowd.viewOf(dino);
       const visible = dino.alive && (dino === player || canSee(player, dino));
       view.setVisible(visible);
@@ -400,9 +375,9 @@ export class Game {
     this.sun.follow(this.focus, 22 + 9 * zoom);
     this.sky.position.copy(camera.position);
     this.eggs.update(dt);
-    this.meat.update(this.world.meat);
-    this.critters.update(dt, this.world.critters, this.critterHistory, alpha);
-    this.vents.update(this.world.time - (1 - alpha) * TICK_SECONDS);
+    this.meat.update(session.meat);
+    this.critters.update(dt, session.critters, (critter, out) => session.critterPose(critter, out));
+    this.vents.update(session.time);
     animateLava(this.pools, time);
 
     this.renderer.render(this.scene, camera);
@@ -411,21 +386,21 @@ export class Game {
       this.canvas.dataset.ready = 'true'; // lets smoke tests wait for the first frame
     }
 
-    this.placeNameTags(zoom);
+    this.placeNameTags(zoom, player);
     // Where the dinosaur is on screen, for mouse steering.
     this.projected.set(subjectPose.x, ground + 0.5 * zoom, subjectPose.z).project(camera);
     this.dinoOnScreen.x = ((this.projected.x + 1) / 2) * this.canvas.clientWidth;
     this.dinoOnScreen.y = ((1 - this.projected.y) / 2) * this.canvas.clientHeight;
   }
 
-  private placeNameTags(zoom: number): void {
+  private placeNameTags(zoom: number, player: SessionDino): void {
     const camera = this.cameraRig.camera;
     const range = NAME_TAG_DISTANCE + NAME_TAG_DISTANCE_PER_SCALE * zoom;
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     this.nameTags.begin();
-    for (const dino of this.world.dinos.values()) {
-      if (dino === this.player || !dino.alive || !canSee(this.player, dino)) continue;
+    for (const dino of this.session.dinos.values()) {
+      if (dino === player || !dino.alive || !canSee(player, dino)) continue;
       const pose = this.poses.get(dino.id) ?? dino;
       if (Math.hypot(pose.x - camera.position.x, pose.z - camera.position.z) > range) continue;
       const scale = this.crowd.viewOf(dino).bodyScale;
@@ -441,20 +416,19 @@ export class Game {
       this.nameTags.show(
         dino.id,
         dino.name,
-        threatBetween(this.player.mass, dino.mass),
+        threatBetween(player.mass, dino.mass),
         ((this.projected.x + 1) / 2) * width,
         ((1 - this.projected.y) / 2) * height,
       );
     }
-    this.nameTags.end((id) => this.world.dinos.has(id));
+    this.nameTags.end((id) => this.session.dinos.has(id));
   }
 
   // --- Interface -------------------------------------------------------------------
 
-  private updateInterface(timeMs: number): void {
-    const player = this.player;
+  private updateInterface(timeMs: number, player: SessionDino): void {
     this.hud.update(player.mass);
-    this.hud.setStatus(this.statusChips());
+    this.hud.setStatus(this.statusChips(player));
     this.killFeed.update(timeMs);
     if (!player.alive) this.deathScreen.update(player.respawnIn);
     this.hint.update(timeMs, this.controls.used);
@@ -464,11 +438,11 @@ export class Game {
       cpuMs: this.cpuMs,
       drawCalls: this.renderer.info.render.calls,
       triangles: this.renderer.info.render.triangles,
-      pingMs: null,
+      pingMs: this.session.pingMs,
       entities: {
         dinos: this.dinosAlive(),
         eggs: this.eggsAlive(),
-        meat: this.world.meat.size,
+        meat: this.session.meat.size,
         critters: this.crittersAlive(),
       },
       player: {
@@ -483,8 +457,7 @@ export class Game {
     });
   }
 
-  private statusChips(): StatusChip[] {
-    const player = this.player;
+  private statusChips(player: SessionDino): StatusChip[] {
     if (!player.alive) return [];
     const chips: StatusChip[] = [];
     if (player.protectedFor > 0) {
@@ -523,19 +496,19 @@ export class Game {
 
   private eggsAlive(): number {
     let alive = 0;
-    for (const egg of this.world.eggs) if (egg.alive) alive++;
+    for (const egg of this.session.eggs) if (egg.alive) alive++;
     return alive;
   }
 
   private crittersAlive(): number {
     let alive = 0;
-    for (const critter of this.world.critters) if (critter.alive) alive++;
+    for (const critter of this.session.critters) if (critter.alive) alive++;
     return alive;
   }
 
   private dinosAlive(): number {
     let alive = 0;
-    for (const dino of this.world.dinos.values()) if (dino.alive) alive++;
+    for (const dino of this.session.dinos.values()) if (dino.alive) alive++;
     return alive;
   }
 
@@ -553,25 +526,32 @@ export class Game {
   };
 
   private createDebugApi(): DebugApi {
-    const player = this.player;
+    const session = this.session;
+    const offlineOnly = (name: string) =>
+      new Error(`window.__extinct.${name}() only works in the offline sandbox (?offline)`);
     return {
       state: () => {
-        const eater = player.eatenBy === null ? undefined : this.world.dinos.get(player.eatenBy);
+        const player = session.player;
+        const eater =
+          player?.eatenBy === null || player?.eatenBy === undefined
+            ? undefined
+            : session.dinos.get(player.eatenBy);
         return {
-          x: player.x,
-          z: player.z,
-          heading: player.heading,
-          speed: player.speed,
-          mass: player.mass,
-          species: tierForMass(player.mass).species,
-          alive: player.alive,
-          protectedFor: player.protectedFor,
-          respawnIn: player.respawnIn,
-          sprinting: player.sprinting,
-          hidden: isHiddenInFerns(player),
+          mode: session.mode,
+          x: player?.x ?? 0,
+          z: player?.z ?? 0,
+          heading: player?.heading ?? 0,
+          speed: player?.speed ?? 0,
+          mass: player?.mass ?? 0,
+          species: tierForMass(player?.mass ?? MASS.start).species,
+          alive: player?.alive ?? false,
+          protectedFor: player?.protectedFor ?? 0,
+          respawnIn: player?.respawnIn ?? 0,
+          sprinting: player?.sprinting ?? false,
+          hidden: player ? isHiddenInFerns(player) : false,
           eatenBy: eater?.name ?? null,
           eggsAlive: this.eggsAlive(),
-          meat: this.world.meat.size,
+          meat: session.meat.size,
           dinosAlive: this.dinosAlive(),
           controls: this.controls.scheme,
         };
@@ -582,9 +562,9 @@ export class Game {
         drawCalls: this.renderer.info.render.calls,
         triangles: this.renderer.info.render.triangles,
       }),
-      bots: () =>
-        [...this.world.dinos.values()]
-          .filter((dino) => dino.isBot)
+      others: () =>
+        [...session.dinos.values()]
+          .filter((dino) => dino !== session.player)
           .map((dino) => ({
             id: dino.id,
             name: dino.name,
@@ -592,58 +572,24 @@ export class Game {
             z: dino.z,
             mass: dino.mass,
             alive: dino.alive,
-            mode: this.world.brainOf(dino.id)?.mode ?? 'none',
           })),
+      bots: () => session.test.bots?.() ?? [],
       setMass: (mass) => {
-        this.handle(this.world.setMass(player, mass), performance.now());
+        session.test.setMass(mass);
       },
-      placeEggAhead: (distance) => {
-        const slot = this.world.eggs.findIndex((egg) => egg.alive);
-        if (slot < 0) return;
-        const egg = this.world.eggs[slot];
-        egg.x = player.x + Math.sin(player.heading) * distance;
-        egg.z = player.z + Math.cos(player.heading) * distance;
-        this.eggs.eggSpawned(slot);
-      },
-      placeDinoAhead: (mass, distance, facing, side = 0) => {
-        let bot: Dino | undefined;
-        let furthest = -1;
-        for (const dino of this.world.dinos.values()) {
-          if (!dino.isBot || !dino.alive) continue;
-          const gap = Math.hypot(dino.x - player.x, dino.z - player.z);
-          if (gap > furthest) {
-            bot = dino;
-            furthest = gap;
-          }
-        }
-        bot ??= this.world.addBot();
-        this.handle(this.world.setMass(bot, mass), performance.now());
-        const forwardX = Math.sin(player.heading);
-        const forwardZ = Math.cos(player.heading);
-        // The player's right is (-forwardZ, forwardX) on the ground plane.
-        const [x, z] = keepOnIsland(
-          player.x + forwardX * distance - forwardZ * side,
-          player.z + forwardZ * distance + forwardX * side,
-        );
-        bot.x = x;
-        bot.z = z;
-        bot.heading = facing === 'toward' ? player.heading + Math.PI : player.heading;
-        bot.speed = 0;
-        bot.pushX = 0;
-        bot.pushZ = 0;
-        bot.protectedFor = 0;
-        this.dinoHistory.forget(bot.id);
-        this.crowd.find(bot.id)?.snap(bot.mass);
-        return bot.id;
-      },
-      teleport: (x, z, heading = player.heading) => {
-        [player.x, player.z] = keepOnIsland(x, z);
-        player.heading = heading;
-        player.speed = 0;
-        this.dinoHistory.forget(player.id);
+      teleport: (x, z, heading) => {
+        session.test.teleport(x, z, heading);
       },
       endProtection: () => {
-        player.protectedFor = 0;
+        session.test.endProtection();
+      },
+      placeEggAhead: (distance) => {
+        if (!session.test.placeEggAhead) throw offlineOnly('placeEggAhead');
+        session.test.placeEggAhead(distance);
+      },
+      placeDinoAhead: (mass, distance, facing, side) => {
+        if (!session.test.placeDinoAhead) throw offlineOnly('placeDinoAhead');
+        return session.test.placeDinoAhead(mass, distance, facing, side);
       },
     };
   }
