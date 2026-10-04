@@ -52,6 +52,7 @@ pnpm format                  # fix formatting
 - **Tests:** Vitest unit tests sit next to the code as `*.test.ts`; browser tests go in `e2e/`. New logic in `shared/` and `server/` comes with tests. Never skip or disable a failing test to get green.
 - **Browser tests run without a GPU** (in CI and cloud sessions), so Chromium renders in software at roughly 4–12 FPS.
   - Never make an e2e test depend on wall-clock durations. Hold an input until the game state changes, with `holdUntil` and `waitForState` from `e2e/game.ts`. Tests open an island without bots unless they ask for some (`openGame(page, '&bots=1')`).
+  - One round trip to a software-rendered page can take seconds, so short-lived interface (the 3-second death card, kill feed lines) can come and go between two polls. Read it inside the page on the frame it appears with `captureFrames`, started before you trigger the event.
   - Frame rates measured there mean nothing. Judge performance by the overlay's CPU time, draw calls and triangles, and check FPS on real hardware.
   - Anything integrated over frame time must stay stable at long frames: frames are clamped to 0.25 s, and springs are sub-stepped (see `cameraRig.ts`).
 - **Debug hooks:**

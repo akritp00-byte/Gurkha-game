@@ -66,6 +66,29 @@ export function placeEggAhead(page: Page, distance: number): Promise<void> {
   }, distance);
 }
 
+/**
+ * Place bots (see `placeDinoAhead`) and read the threat colour of every visible name tag two
+ * frames later, before any bot has had time to react and run off screen.
+ */
+export function threatsAfterPlacing(
+  page: Page,
+  bots: readonly { mass: number; distance: number; side: number }[],
+): Promise<string[]> {
+  return page.evaluate(async (placements) => {
+    const api = (window as unknown as DebugWindow).__extinct;
+    for (const bot of placements) api.placeDinoAhead(bot.mass, bot.distance, 'away', bot.side);
+    const nextFrame = () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(resolve);
+      });
+    await nextFrame();
+    await nextFrame();
+    return [...document.querySelectorAll<HTMLElement>('.name-tag:not([hidden])')].map(
+      (tag) => tag.dataset.threat ?? '',
+    );
+  }, bots);
+}
+
 /** Put a bot of `mass` this far ahead of the player, facing `toward` it or `away`. */
 export function placeDinoAhead(
   page: Page,
@@ -114,6 +137,72 @@ export async function holdUntil(
     await release();
   }
   return gameState(page);
+}
+
+/** What the screen showed on one frame. Hidden elements read as null. */
+export interface Capture {
+  state: GameState;
+  deathScreen: string | null;
+  killFeed: string;
+  hudStatus: string;
+}
+
+/** A condition on the player that `captureFrames` checks every frame, inside the page. */
+export interface CaptureCondition {
+  alive?: boolean;
+  minMass?: number;
+}
+
+/**
+ * Watch the game frame by frame, inside the page, and read the screen on the first frame that
+ * matches each condition in turn. Software-rendered test pages are so slow that one round
+ * trip from the test can take seconds, so a 3-second death card or a kill feed line can come
+ * and go between two polls. Start this before triggering what you're waiting for, and await
+ * it afterwards.
+ */
+export function captureFrames(
+  page: Page,
+  conditions: readonly CaptureCondition[],
+  timeoutMs = 60_000,
+): Promise<Capture[]> {
+  return page.evaluate(
+    async ({ conditions: wanted, timeoutMs: timeout }) => {
+      const api = (window as unknown as DebugWindow).__extinct;
+      const text = (testId: string): string | null => {
+        const element = document.querySelector(`[data-testid="${testId}"]`);
+        return element instanceof HTMLElement && !element.hidden ? element.innerText : null;
+      };
+      const nextFrame = () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(resolve);
+        });
+      const deadline = performance.now() + timeout;
+      const captures: Capture[] = [];
+      for (const { alive, minMass } of wanted) {
+        for (;;) {
+          const state = api.state();
+          const matches =
+            (alive === undefined || state.alive === alive) &&
+            (minMass === undefined || state.mass >= minMass);
+          if (matches) {
+            captures.push({
+              state,
+              deathScreen: text('death-screen'),
+              killFeed: text('kill-feed') ?? '',
+              hudStatus: text('hud-status') ?? '',
+            });
+            break;
+          }
+          if (performance.now() > deadline) {
+            throw new Error(`no frame matched ${JSON.stringify({ alive, minMass })}`);
+          }
+          await nextFrame();
+        }
+      }
+      return captures;
+    },
+    { conditions, timeoutMs },
+  );
 }
 
 /** Wait until the game state passes `check` (state changes, never wall-clock time). */

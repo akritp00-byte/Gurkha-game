@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { FERN_PATCHES } from '../shared/world/layout.ts';
 import { speedForMass } from '../shared/movement.ts';
 import {
+  captureFrames,
   endProtection,
   gameState,
   holdUntil,
@@ -9,6 +10,7 @@ import {
   placeDinoAhead,
   setMass,
   teleport,
+  threatsAfterPlacing,
   waitForState,
   watchForErrors,
 } from './game.ts';
@@ -45,11 +47,12 @@ test.describe('desktop', () => {
     await setMass(page, 40);
     await endProtection(page);
 
+    const frames = captureFrames(page, [{ minMass: 46.9 }]);
     await placeDinoAhead(page, 10, 1.5, 'away');
+    const [fed] = await frames;
 
-    const fed = await waitForState(page, (state) => state.mass >= 46.9);
-    expect(fed.mass).toBeLessThan(48); // 40 + 7, plus maybe an egg
-    await expect(page.getByTestId('kill-feed')).toContainText('You ate');
+    expect(fed.state.mass).toBeLessThan(48); // 40 + 7, plus maybe an egg
+    expect(fed.killFeed).toContain('You ate');
     expect(errors).toEqual([]);
   });
 
@@ -57,33 +60,34 @@ test.describe('desktop', () => {
     await openGame(page, '&bots=2');
     await teleport(page, 70, -10, 0);
     await setMass(page, 30);
-    await placeDinoAhead(page, 60, 9, 'away', -3);
-    await placeDinoAhead(page, 12, 9, 'away', 3);
 
-    await expect(page.locator('.name-tag[data-threat="danger"]')).toBeVisible();
-    await expect(page.locator('.name-tag[data-threat="prey"]')).toBeVisible();
+    const threats = await threatsAfterPlacing(page, [
+      { mass: 60, distance: 9, side: -3 },
+      { mass: 12, distance: 9, side: 3 },
+    ]);
+
+    expect(threats.sort()).toEqual(['danger', 'prey']);
   });
 
   test('getting eaten shows who did it, then hatches you again with spawn protection', async ({
     page,
   }) => {
+    test.slow(); // waits out the respawn delay on a software-rendered page
     const errors = watchForErrors(page);
     await openGame(page, '&bots=1');
     await endProtection(page);
 
+    const frames = captureFrames(page, [{ alive: false }, { alive: true }]);
     await placeDinoAhead(page, 200, 1.5, 'toward');
+    const [dead, reborn] = await frames;
 
-    const dead = await waitForState(page, (state) => !state.alive);
-    const deathScreen = page.getByTestId('death-screen');
-    await expect(deathScreen).toBeVisible();
-    await expect(deathScreen).toContainText(`${dead.eatenBy ?? '?'} the Dilophosaurus ate you`);
-    await expect(page.getByTestId('kill-feed')).toContainText('ate You');
-
-    const reborn = await waitForState(page, (state) => state.alive);
-    await expect(page.getByTestId('hud-status')).toContainText('Spawn protection');
-    expect(reborn.mass).toBe(10);
-    expect(reborn.protectedFor).toBeGreaterThan(0);
-    await expect(deathScreen).toBeHidden();
+    expect(dead.state.eatenBy).not.toBeNull();
+    expect(dead.deathScreen).toContain(`${dead.state.eatenBy ?? '?'} the Dilophosaurus ate you`);
+    expect(dead.killFeed).toContain('ate You');
+    expect(reborn.state.mass).toBe(10);
+    expect(reborn.state.protectedFor).toBeGreaterThan(0);
+    expect(reborn.deathScreen).toBeNull();
+    expect(reborn.hudStatus).toContain('Spawn protection');
     expect(errors).toEqual([]);
   });
 
