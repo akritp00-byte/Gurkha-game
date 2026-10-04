@@ -9,7 +9,7 @@ import {
   tierForMass,
 } from '@extinct/shared';
 import { Group } from 'three';
-import { createDinoRig, type DinoRig } from './dinoModel.ts';
+import { createDinoMaterial, createDinoRig, type DinoRig } from './dinoModel.ts';
 
 /** What the view needs to know about a dinosaur each frame. */
 export interface DinoPose {
@@ -22,10 +22,13 @@ export interface DinoPose {
 
 const BITE_SECONDS = 0.28;
 const STRIDE_PER_LEG_LENGTH = 2.6;
+/** Spawn protection makes the dinosaur pulse with this glow. */
+const SHIELD_GLOW = { r: 0.25, g: 0.45, b: 0.8 };
 
 /** One dinosaur on screen: placement on the terrain, growth, evolution and procedural animation. */
 export class DinoView {
   readonly root = new Group();
+  private readonly material = createDinoMaterial();
   private rig: DinoRig;
   private tier: number;
   private scale: number;
@@ -39,7 +42,7 @@ export class DinoView {
   constructor(mass: number) {
     this.tier = tierForMass(mass).tier;
     this.scale = scaleForMass(mass);
-    this.rig = createDinoRig(this.tier);
+    this.rig = createDinoRig(this.tier, this.material);
     this.root.add(this.rig.mesh);
     this.root.rotation.order = 'YXZ';
   }
@@ -51,6 +54,39 @@ export class DinoView {
 
   bite(): void {
     this.biteTime = 0;
+  }
+
+  /** Show or hide the dinosaur (and its shadow). */
+  setVisible(visible: boolean): void {
+    this.rig.mesh.visible = visible;
+  }
+
+  /** Glow, from 0 (none) to 1 (full), e.g. pulsing while spawn protection lasts. */
+  setGlow(amount: number): void {
+    this.material.emissive.setRGB(
+      SHIELD_GLOW.r * amount,
+      SHIELD_GLOW.g * amount,
+      SHIELD_GLOW.b * amount,
+    );
+  }
+
+  /**
+   * Forget all smoothing, e.g. after a respawn, so a hatchling doesn't shrink down from the
+   * giant it used to be or lean into a turn it never made.
+   */
+  snap(mass: number): void {
+    this.evolveIfNeeded(mass);
+    this.scale = scaleForMass(mass);
+    this.lastHeading = undefined;
+    this.pitch = 0;
+    this.lean = 0;
+    this.biteTime = -1;
+  }
+
+  dispose(): void {
+    this.rig.mesh.skeleton.dispose();
+    this.material.dispose();
+    this.root.removeFromParent();
   }
 
   update(dt: number, pose: DinoPose, field: Heightfield): void {
@@ -87,10 +123,12 @@ export class DinoView {
   private evolveIfNeeded(mass: number): void {
     const tier = tierForMass(mass).tier;
     if (tier === this.tier) return;
+    const visible = this.rig.mesh.visible;
     this.root.remove(this.rig.mesh);
     this.rig.mesh.skeleton.dispose();
     this.tier = tier;
-    this.rig = createDinoRig(tier);
+    this.rig = createDinoRig(tier, this.material);
+    this.rig.mesh.visible = visible;
     this.root.add(this.rig.mesh);
   }
 

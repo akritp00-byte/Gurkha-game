@@ -11,8 +11,8 @@ export class ControlsHint {
     this.element = document.createElement('p');
     this.element.className = 'controls-hint';
     this.element.textContent = touchFirst
-      ? 'Drag on the left side of the screen to run · eat eggs to grow'
-      : 'WASD or arrow keys to run · or hold the mouse button to steer · eat eggs to grow · F3 debug';
+      ? 'Drag on the left to run · hold Sprint to dash · eat anything smaller (green), flee the red'
+      : 'WASD or hold the mouse to run · Shift to sprint · eat anything smaller (green), flee the red';
     parent.append(this.element);
     this.shownAt = now;
   }

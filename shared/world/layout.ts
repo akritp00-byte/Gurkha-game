@@ -79,3 +79,19 @@ export const FERN_PATCHES: readonly CircleArea[] = [
   { x: -118, z: -40, radius: 8 },
   { x: 40, z: 110, radius: 8 },
 ];
+
+export interface Vent {
+  readonly x: number;
+  readonly z: number;
+  /** Seconds added to the clock for this vent, so the vents erupt one after another. */
+  readonly phase: number;
+}
+
+/** Steam vents on the volcano's slopes (timing and blast strength are in config.ts VENTS). */
+export const VOLCANO_VENTS: readonly Vent[] = [
+  { x: 18, z: 14, phase: 0 },
+  { x: -20, z: 15, phase: 2 },
+  { x: -6, z: -25, phase: 4 },
+  { x: 24, z: -12, phase: 6 },
+  { x: 2, z: 27, phase: 8 },
+];

@@ -330,7 +330,13 @@ function buildGeometry(style: SpeciesStyle, layout: Layout): BufferGeometry {
 // --- Rig ------------------------------------------------------------------------------
 
 const cache = new Map<number, { geometry: BufferGeometry; layout: Layout }>();
-const material = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+
+/** The flat-shaded, vertex-coloured material every dinosaur uses. Each dinosaur gets its own copy so it can glow. */
+export function createDinoMaterial(): MeshLambertMaterial {
+  return new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+}
+
+const sharedMaterial = createDinoMaterial();
 
 function speciesGeometry(tier: number) {
   let entry = cache.get(tier);
@@ -343,8 +349,11 @@ function speciesGeometry(tier: number) {
   return entry;
 }
 
-/** A new, independently animated placeholder dinosaur for a tier. Geometry is shared per species. */
-export function createDinoRig(tier: number): DinoRig {
+/**
+ * A new, independently animated placeholder dinosaur for a tier. Geometry is shared per
+ * species, and so is the material unless one is passed in.
+ */
+export function createDinoRig(tier: number, material = sharedMaterial): DinoRig {
   const { geometry, layout } = speciesGeometry(tier);
   const bones = Array.from({ length: BONE_COUNT }, () => new Bone());
   const worldPositions: Vector3[] = [];

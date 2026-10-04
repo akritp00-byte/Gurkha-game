@@ -60,6 +60,36 @@ export const FOOD = {
   eggRadius: 0.25,
 } as const;
 
+/** Meat chunks dropped by sprinting dinosaurs. */
+export const MEAT = {
+  /** Meat rots away after this long. */
+  lifetimeSeconds: 30,
+  /** When the island holds this many chunks, the oldest one disappears. */
+  maxChunks: 300,
+  radius: 0.22,
+  /** Chunks land just behind the dinosaur, scattered by up to this many body scales. */
+  scatter: 0.35,
+} as const;
+
+/** Small fleeing critters: quick snacks for small dinosaurs. */
+export const CRITTERS = {
+  count: 24,
+  radius: 0.25,
+  wanderSpeed: 2.2,
+  /** Slower than a fresh Compsognathus, so they can be caught, but they dodge. */
+  fleeSpeed: 7.5,
+  /** Critters bolt when a dinosaur comes this close. */
+  fearRadius: 11,
+  /** Radians per second. */
+  turnRate: 5,
+  /** Fleeing critters zigzag this far either side of straight away (radians), this fast. */
+  dodgeAngle: 0.6,
+  dodgeRate: 7,
+  /** A wandering critter picks a new direction this often. */
+  wanderSeconds: { min: 1.5, max: 4 },
+  respawnSeconds: 8,
+} as const;
+
 /**
  * The bite zone: a circle in front of the dinosaur that eats whatever it touches.
  * Measured in body scales (scale 1 is a newly spawned dinosaur), so it grows with the dino.
@@ -68,6 +98,14 @@ export const BITE = {
   /** Distance from the body's centre to the centre of the bite zone, near the snout. */
   reach: 0.55,
   radius: 0.45,
+} as const;
+
+/**
+ * A dinosaur's body for the eat rule: a circle round its middle, in body scales. Bites and
+ * bodies are compared on the ground plane, so a tall T-Rex can still eat a tiny Compsognathus.
+ */
+export const BODY = {
+  radius: 0.4,
 } as const;
 
 /**
@@ -92,8 +130,13 @@ export const MOVEMENT = {
 /** Sprinting trades mass for speed and drops meat chunks that anyone can eat. */
 export const SPRINT = {
   speedMultiplier: 1.6,
-  /** Fraction of current mass lost per second while sprinting (stops at `MASS.minimum`). */
+  /**
+   * Fraction of current mass lost per second while sprinting. Mass never drops below
+   * `MASS.minimum`, and a dinosaur at the minimum has nothing left to burn, so it can't sprint.
+   */
   massLossPerSecond: 0.015,
+  /** Lost mass is dropped as meat (FOOD_MASS.meat per chunk), at most this many chunks a second. */
+  maxMeatDropsPerSecond: 4,
 } as const;
 
 /** Body scale grows with mass ^ scaleExponent within a tier, with a visible jump on each evolution. */
@@ -113,6 +156,26 @@ export const WORLD = {
   tarPitSpeedMultiplier: 0.5,
 } as const;
 
+/** Volcano vents (positions in world/layout.ts) that blast nearby dinosaurs away. */
+export const VENTS = {
+  /** Each vent erupts this often; their phases are staggered. */
+  periodSeconds: 10,
+  /** Rumbling and glowing before an eruption, as a warning. */
+  warningSeconds: 1.6,
+  /** Dinosaurs whose body is this close to an erupting vent are thrown clear. */
+  radius: 7,
+  /** Speed of the throw at the vent's centre, in units per second. It fades quickly. */
+  knockbackSpeed: 18,
+  /** At the edge of the blast the throw is this fraction of the full speed. */
+  edgeKnockback: 0.4,
+} as const;
+
+/** External pushes (vent blasts now, the Charge ability later). */
+export const PUSH = {
+  /** Exponential fade rate per second: a push travels about speed / damping units. */
+  damping: 3.5,
+} as const;
+
 /** Fern patches hide small dinosaurs. The server enforces this by not sending them. */
 export const FERNS = {
   /** Dinosaurs up to and including this tier can hide in ferns. */
@@ -130,8 +193,10 @@ export const ROUND = {
   /** Podium time before the next round starts. */
   intermissionSeconds: 10,
   respawnDelaySeconds: 3,
-  /** After respawning you can't eat or be eaten for this long. */
+  /** After respawning you can't eat other dinosaurs or be eaten for this long. Food is fine. */
   spawnProtectionSeconds: 3,
+  /** Respawns pick a spot at least this far from anything that could eat a new dinosaur, if they can. */
+  safeSpawnDistance: 30,
 } as const;
 
 /** Room capacity (BUILD_PROMPT.md §3, "Rooms and bots"). */
@@ -141,10 +206,41 @@ export const ROOM = {
   minDinosaurs: 16,
 } as const;
 
-/** Bot behaviour. Bots must never feel perfect. */
+/** Bot behaviour (BUILD_PROMPT.md §3, "Rooms and bots"). Bots must never feel perfect. */
 export const BOTS = {
-  /** Human-like reaction delay range. */
+  /** Bots decide this often, like a human's reaction time. Skilled bots react faster. */
   reactionDelayMs: { min: 200, max: 500 },
+  /** Each bot gets a skill from this range: 0 is clumsy and inattentive, 1 is sharp. */
+  skill: { min: 0.15, max: 0.9 },
+  /** How far bots notice food and prey: base distance plus extra per body scale. */
+  sightRange: 34,
+  sightPerScale: 4,
+  /** A bot flees from a threat whose bite comes closer than this (further for skilled bots). */
+  fleeRange: 20,
+  /** Bots sprint after prey, or away from a threat, once the gap to the bite is this small. */
+  sprintRange: 8,
+  /** Food and prey are scored as mass gained / (distance + this), so nearby food wins. */
+  distanceBias: 4,
+  /** Critters run away, so bots value them at this fraction of their mass. */
+  critterAppeal: 0.5,
+  /** ...and at this fraction once a critter is fleeing faster than the bot can run. */
+  fleeingCritterAppeal: 0.15,
+  /** A bot gives up a chase after this long and leaves hunting alone for a while. */
+  chaseGiveUpSeconds: 7,
+  huntCooldownSeconds: 4,
+  /** Small bots that are fleeing run for a fern patch within this distance. */
+  fernSeekRange: 35,
+  /** Wandering bots stroll to a spot this far away. */
+  wanderDistance: { min: 15, max: 45 },
+  /** Largest random steering error, in radians, for the clumsiest bot. */
+  maxSteeringWobble: 0.45,
+  /** How hard bots steer towards their goal, from the clumsiest to the sharpest. */
+  steeringGain: { min: 1.2, max: 3.5 },
+  /** How far ahead bots look out for tar pits and the crater, from the clumsiest to the sharpest. */
+  hazardLookahead: { min: 4, max: 12 },
+  /** Chance per decision that a bot gets distracted and wanders off, ignoring everything. */
+  distractionChance: 0.04,
+  distractionSeconds: { min: 1, max: 2.5 },
 } as const;
 
 export interface AbilityTuning {
@@ -207,9 +303,21 @@ export const CAMERA = {
   zoomSharpness: 2.5,
   /** Minimum gap between the camera and the ground, in world units. */
   groundClearance: 0.5,
-  /** Camera punch strength for a bite and for an evolution. */
+  /** Camera punch strength for biting food, eating a dinosaur and evolving. */
   bitePunch: 0.35,
+  killPunch: 1.4,
   evolvePunch: 2.5,
+  /** A vent erupting within this distance of you punches the camera this hard. */
+  ventPunch: 0.8,
+  ventPunchDistance: 25,
+} as const;
+
+/** Game-feel effects on the client. */
+export const EFFECTS = {
+  /** Brief freeze of the picture when you eat a dinosaur. The game itself keeps running. */
+  hitstopSeconds: 0.08,
+  /** Spawn-protected dinosaurs pulse with a glow this many times a second. */
+  protectionBlinkHz: 4,
 } as const;
 
 /** Steering feel for mouse and touch controls. */

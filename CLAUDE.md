@@ -20,17 +20,20 @@ pnpm format                  # fix formatting
 - **pnpm monorepo** with `client/`, `server/` and `shared/`. Source sits directly in each package folder (no `src/`), so paths match the brief: `shared/config.ts`, `client/render/`, `server/systems/`.
 - **`shared/`** is pure TypeScript game logic and constants used by both sides. No DOM, Node, Three.js or Colyseus imports (ESLint enforces this). Keep it deterministic, because the same code runs on the server and in client-side prediction. Import it as `@extinct/shared`; `shared/index.ts` re-exports everything.
   - `config.ts`: gameplay and network tuning.
-  - `movement.ts`: `stepMotion`, the movement step function, plus the speed and turn-rate curves.
+  - `movement.ts`: `stepMotion`, the movement step function (sprint, terrain slowdown and pushes), plus the speed and turn-rate curves. `sanitizeInput` makes untrusted input safe.
+  - `eating.ts`: the eat rule (`outweighs`, bite zones, `massGained`) and threat colours (`threatBetween`).
+  - `visibility.ts`: fern hiding (`isHiddenInFerns`, `canSee`). Bots perceive through it, and the server will filter what clients receive with it.
   - `tiers.ts`: tier lookup and body scale.
-  - `sim/world.ts`: `GameWorld`, the simulation of dinosaurs, eggs and eating. It returns events (`eggEaten`, `evolved`, ...) for effects and, later, network messages. Seeded, so tests are repeatable.
-  - `world/layout.ts`: level design, meaning where the volcano, river, tar pits and fern patches are.
-  - `world/terrain.ts`: island heights and zones. `islandHeightfield()` is built once; `heightAt()` matches the rendered triangles exactly.
+  - `sim/world.ts`: `GameWorld`, the whole simulation: dinosaurs and bots, eggs, meat, critters, vents, eating, death, respawn and spawn protection. `step()` returns events (`dinoEaten`, `tierChanged`, `meatDropped`, `ventErupted`, ...) for effects and, later, network messages. Seeded, so the same seed and inputs replay exactly.
+  - `sim/entities.ts`: the entity and event types. `sim/bots.ts`: bot brains (`botInput`). `sim/vents.ts`: the vent clock. `sim/names.ts`: bot names.
+  - `world/layout.ts`: level design, meaning where the volcano, vents, river, tar pits and fern patches are.
+  - `world/terrain.ts`: island heights and zones, including `terrainSpeedFactor`. `islandHeightfield()` is built once; `heightAt()` matches the rendered triangles exactly.
 - **`server/`** is the authoritative Colyseus 0.18 server. `index.ts` is the entry point. `app.ts` builds the server without binding a port, so tests can start it on port 0. `env.ts` loads the repo-root `.env`. Clients only ever send inputs. Never trust a position sent by a client.
 - **`client/`** is Three.js + Vite, with no game engine. `assets/` and `audio/` come later.
-  - `game/Game.ts`: the offline sandbox. It samples input, steps `GameWorld` at a fixed `NETWORK.tickRate` (the same rate as the server) and renders interpolated between ticks.
-  - `input/`: keyboard, held-mouse and touch-joystick steering. The pure mappings live in `steering.ts`, so they can be unit tested.
-  - `render/`: `terrain.ts`, `vegetation.ts` and `eggs.ts` (instanced), `environment.ts` (sky, fog, sun shadows that follow the player), `cameraRig.ts`, `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each.
-  - `ui/`: HUD, F3 debug overlay, controls hint and CSS.
+  - `game/Game.ts`: the offline sandbox. It samples input, steps `GameWorld` (with bots) at a fixed `NETWORK.tickRate` (the same rate as the server), turns events into effects and renders everything interpolated between ticks (`poseHistory.ts`).
+  - `input/`: keyboard, held-mouse and touch-joystick steering, plus sprint (Shift or the touch button). The pure mappings live in `steering.ts`, so they can be unit tested.
+  - `render/`: `terrain.ts`, `vegetation.ts`, `eggs.ts`, `meat.ts`, `critters.ts` and `threatRings.ts` (each one instanced draw call), `vents.ts`, `environment.ts` (sky, fog, sun shadows that follow the player), `cameraRig.ts`, `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each (`crowd.ts` keeps one view per dinosaur).
+  - `ui/`: HUD with status chips, name tags, kill feed, death card, F3 debug overlay, controls hint and CSS.
   - `net/`: talking to the game server.
   - `dev/`: developer pages that aren't part of the build, e.g. `/dev/dinos.html`.
 - **Multiplayer (from M3):** the client sends inputs (sequence number, direction, sprint, ability). The server simulates at `NETWORK.tickRate` and sends state patches filtered to `NETWORK.interestRadius`, with fern hiding enforced there. The client predicts its own dino with the shared step function and reconciles against the server. Other dinos are interpolated `NETWORK.interpolationDelayMs` in the past.
@@ -48,12 +51,12 @@ pnpm format                  # fix formatting
 - **Erasable syntax only** (`erasableSyntaxOnly`). Node strips types but can't compile, so use no enums (use `as const` objects with union types), namespaces, parameter properties or decorators. Define Colyseus state with `@colyseus/schema`'s `schema()` / `t` builders, not `@type()` decorators.
 - **Tests:** Vitest unit tests sit next to the code as `*.test.ts`; browser tests go in `e2e/`. New logic in `shared/` and `server/` comes with tests. Never skip or disable a failing test to get green.
 - **Browser tests run without a GPU** (in CI and cloud sessions), so Chromium renders in software at roughly 4–12 FPS.
-  - Never make an e2e test depend on wall-clock durations. Hold an input until the game state changes, as `holdUntil` in `e2e/controls.spec.ts` does.
+  - Never make an e2e test depend on wall-clock durations. Hold an input until the game state changes, with `holdUntil` and `waitForState` from `e2e/game.ts`. Tests open an island without bots unless they ask for some (`openGame(page, '&bots=1')`).
   - Frame rates measured there mean nothing. Judge performance by the overlay's CPU time, draw calls and triangles, and check FPS on real hardware.
   - Anything integrated over frame time must stay stable at long frames: frames are clamped to 0.25 s, and springs are sub-stepped (see `cameraRig.ts`).
 - **Debug hooks:**
-  - URL options: `?seed=` (repeatable island and spawn), `?mass=`, `?debug` (open the F3 overlay) and `?quality=low|medium|high`.
-  - `window.__extinct` provides `state()`, `stats()`, `setMass()` and `placeEggAhead()` for tests and the console. Debug hooks only ever touch the offline sandbox, never the server.
+  - URL options: `?seed=` (repeatable island and spawn), `?bots=` (default 15), `?mass=`, `?debug` (open the F3 overlay) and `?quality=low|medium|high`.
+  - `window.__extinct` provides `state()`, `stats()`, `bots()`, `setMass()`, `placeEggAhead()`, `placeDinoAhead()`, `teleport()` and `endProtection()` for tests and the console. Debug hooks only ever touch the offline sandbox, never the server.
 - **Dependencies:** as few as possible. Explain why before adding one. Ask before changing the stack, buying assets or signing up for paid services.
 - **Secrets:** `.env` is git-ignored. Update `.env.example` whenever you add a variable. Browser-visible variables must start with `VITE_` and must never hold secrets.
 - **Assets and sounds:** CC0 or properly licensed only, recorded in `CREDITS.md` before committing.

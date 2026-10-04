@@ -2,13 +2,24 @@ import { CONTROLS, IDLE_INPUT } from '@extinct/shared';
 import { describe, expect, it } from 'vitest';
 import { joystickInput, keyboardInput, mouseInput, steerTowards } from './steering.ts';
 
-const keys = { forward: false, back: false, left: false, right: false };
+const keys = { forward: false, back: false, left: false, right: false, sprint: false };
 
 describe('keyboard', () => {
   it('runs with W, turns left with A and right with D', () => {
-    expect(keyboardInput({ ...keys, forward: true })).toEqual({ turn: 0, throttle: 1 });
-    expect(keyboardInput({ ...keys, forward: true, left: true })).toEqual({ turn: 1, throttle: 1 });
-    expect(keyboardInput({ ...keys, right: true })).toEqual({ turn: -1, throttle: 0 });
+    expect(keyboardInput({ ...keys, forward: true })).toEqual({
+      turn: 0,
+      throttle: 1,
+      sprint: false,
+    });
+    expect(keyboardInput({ ...keys, forward: true, left: true })).toMatchObject({
+      turn: 1,
+      throttle: 1,
+    });
+    expect(keyboardInput({ ...keys, right: true })).toMatchObject({ turn: -1, throttle: 0 });
+  });
+
+  it('sprints with Shift', () => {
+    expect(keyboardInput({ ...keys, forward: true, sprint: true }).sprint).toBe(true);
   });
 
   it('brakes with S and cancels opposite turns', () => {

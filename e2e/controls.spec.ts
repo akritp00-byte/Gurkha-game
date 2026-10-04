@@ -1,8 +1,8 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import {
   distanceMoved,
-  type GameState,
   gameState,
+  holdUntil,
   movedLeft,
   openGame,
   placeEggAhead,
@@ -10,27 +10,6 @@ import {
   turned,
   watchForErrors,
 } from './game.ts';
-
-/**
- * Hold an input until the game reacts, instead of for a fixed time: test machines render in
- * software at a few frames per second, so wall-clock durations would make these tests flaky.
- */
-async function holdUntil(
-  page: Page,
-  check: (state: GameState) => boolean,
-  press: () => Promise<void>,
-  release: () => Promise<void>,
-): Promise<GameState> {
-  await press();
-  try {
-    await expect
-      .poll(async () => check(await gameState(page)), { timeout: 15_000, intervals: [100] })
-      .toBe(true);
-  } finally {
-    await release();
-  }
-  return gameState(page);
-}
 
 test.describe('desktop', () => {
   test.skip(({ isMobile }) => isMobile, 'keyboard and mouse controls');

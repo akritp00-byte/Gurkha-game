@@ -2,11 +2,49 @@
 
 One entry per milestone (BUILD_PROMPT.md §9), newest first.
 
-## Unreleased
+## M2: Core rules offline (2026-10-04)
+
+### Added
+
+- **The eat rule.** A dinosaur at least 1.2× the mass of another eats it as soon as its bite zone touches the other's body, and gains 70% of its mass. Bites and bodies are compared on the ground, so a T-Rex can still eat a Compsognathus. The biggest dinosaurs bite first, so nobody is eaten twice in one tick.
+- **Death and respawn.** An eaten dinosaur hatches again as a tier 1 dinosaur after 3 s. It hatches at the safest of a few random spots, at least 30 units from anything that could eat it when possible. Spawn protection then lasts 3 s: it can't eat other dinosaurs or be eaten, shown by a pulsing blue glow.
+- **Sprint.** Shift on desktop, or the Sprint button on phones, gives 1.6× speed. It costs 1.5% of mass per second (never below 10). The burnt mass falls behind as meat chunks worth +2 that anyone can eat. Meat rots after 30 s, and the island holds at most 300 chunks.
+- **Critters.** 24 small proto-mammals worth +4. They wander, then bolt in a zigzag from any dinosaur that comes close.
+- **Terrain effects.** The river slows dinosaurs to 0.7× and tar pits to 0.5×. Five steam vents on the volcano erupt in turn every 10 s. Each one glows, and a warning ring shows its blast radius first, then it throws nearby dinosaurs clear with a steam plume.
+- **Fern hiding.** Tier 1–2 dinosaurs in a fern patch are invisible to anyone more than 10 units away. This applies to bots too, and the shared `canSee` rule is ready for the server to filter with in M3.
+- **Bots.** 15 bots by default (`?bots=N` changes it) that wander, look for food, hunt smaller dinosaurs and flee bigger ones. Small bots flee into ferns. They're deliberately imperfect:
+  - They react only every 200–500 ms, and skilled bots react faster.
+  - Every bot has its own skill level, which also sets how sharply it steers and how far ahead it spots tar pits.
+  - They misjudge food, steer with a wobble, get distracted, and give up long chases.
+- **Readability.**
+  - Rings under every other dinosaur show the threat: red can eat you, green you can eat, pale neither.
+  - Name tags are tinted to match.
+  - A kill feed shows who ate whom.
+  - A death card says who ate you and how big you got, while the camera follows the dinosaur that ate you.
+  - HUD chips show spawn protection, hiding, sprinting and wading.
+- **Game feel.** Bite animations for every dinosaur, plus a camera punch and a short hitstop when you eat a dinosaur. Nearby vent eruptions jolt the camera.
+- **Shared simulation.** `GameWorld` now runs every rule above, deterministically from a seed, and reports events (`dinoEaten`, `meatDropped`, `ventErupted`, `tierChanged`, ...) for effects and, later, network messages. New shared modules: `eating.ts`, `visibility.ts`, `sim/bots.ts`, `sim/entities.ts`, `sim/names.ts` and `sim/vents.ts`.
+- **Debug hooks.** `window.__extinct` adds `bots()`, `placeDinoAhead()`, `teleport()` and `endProtection()`. `state()` now reports being alive, protection, sprinting, hiding and meat.
+- **Tests.**
+  - 89 unit tests. They cover the eat rule, tier thresholds, the speed curve, sprinting, meat, critters, vents, fern hiding and bot behaviour.
+  - A 5-minute simulation with 16 bots checks that the world stays valid every second and that it replays exactly from the same seed.
+  - New Playwright tests for sprinting (keyboard and touch), eating a dinosaur, threat colours, being eaten and respawning, and hiding in ferns.
+
+### Changed
+
+- `tierChanged` replaces the `evolved` event and also reports a drop in tier, which sprinting can cause.
+- Browser tests run on an island with no bots unless a test asks for them.
 
 ### Fixed
 
 - A production build with no game server configured (no `VITE_SERVER_URL`) no longer checks for one every 5 seconds. The debug overlay shows "Server: none (offline build)" instead, so static previews of the single-player game run without network errors.
+
+### Known issues
+
+- Dinosaurs pass through each other (and through trees and rocks) when neither can eat the other.
+- Spawn protection blocks eating other dinosaurs but not food. The brief says protected dinosaurs "can't eat or be eaten"; we read that as being about dinosaurs, so food stays edible.
+- The steam plume, vent mounds, meat and critters are placeholders until the art pass (M5).
+- The death card has no rank or Play Again button yet. Those arrive with the leaderboard and round loop in M4.
 
 ## M1: Single-player sandbox (2026-10-03)
 

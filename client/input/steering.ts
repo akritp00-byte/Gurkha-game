@@ -5,13 +5,15 @@ export interface KeyboardState {
   readonly back: boolean;
   readonly left: boolean;
   readonly right: boolean;
+  readonly sprint: boolean;
 }
 
-/** W/↑ runs, S/↓ brakes, A/D or ←/→ turn (on the spot when standing still). */
+/** W/↑ runs, S/↓ brakes, A/D or ←/→ turn (on the spot when standing still), Shift sprints. */
 export function keyboardInput(keys: KeyboardState): MoveInput {
   return {
     turn: (keys.left ? 1 : 0) - (keys.right ? 1 : 0),
     throttle: keys.forward && !keys.back ? 1 : 0,
+    sprint: keys.sprint,
   };
 }
 
@@ -27,6 +29,7 @@ export function steerTowards(dx: number, dy: number, strength: number): MoveInpu
   return {
     turn: clamp(-angle / CONTROLS.fullLockAngle, -1, 1),
     throttle: clamp(strength, 0, 1),
+    sprint: false,
   };
 }
 

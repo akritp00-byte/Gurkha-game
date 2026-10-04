@@ -122,6 +122,13 @@ export function fernPatchAt(x: number, z: number): CircleArea | undefined {
   return FERN_PATCHES.find((patch) => Math.hypot(x - patch.x, z - patch.z) < patch.radius);
 }
 
+/** Top-speed multiplier from the ground underfoot: slower in tar pits and the river. */
+export function terrainSpeedFactor(x: number, z: number): number {
+  if (tarPitAt(x, z)) return WORLD.tarPitSpeedMultiplier;
+  if (distanceToRiver(x, z) < RIVER.width / 2) return WORLD.riverSpeedMultiplier;
+  return 1;
+}
+
 /** 0 in the open plains (east and south) up to 1 in the jungle (west and north). */
 export function jungleAmount(x: number, z: number): number {
   const bias = (-x * 0.9 + z * 0.5) / WORLD.islandRadius;

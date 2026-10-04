@@ -104,6 +104,166 @@ body {
   opacity: 0.8;
 }
 
+.hud-status {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hud-status li {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.hud-status [data-kind='protected'] {
+  background: rgb(64 140 255 / 0.75);
+}
+
+.hud-status [data-kind='hidden'] {
+  background: rgb(46 140 72 / 0.8);
+}
+
+.hud-status [data-kind='sprinting'] {
+  background: rgb(230 120 30 / 0.8);
+}
+
+.hud-status [data-kind='slowed'] {
+  background: rgb(90 70 50 / 0.8);
+}
+
+/* --- Other dinosaurs: name tags --------------------------------------------------- */
+
+.name-tags {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.name-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.35);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.name-tag[data-threat='danger'] {
+  color: #ff8a80;
+}
+
+.name-tag[data-threat='prey'] {
+  color: #8ef0a5;
+}
+
+/* --- Kill feed ------------------------------------------------------------------- */
+
+.kill-feed {
+  position: absolute;
+  top: var(--safe-top);
+  right: max(12px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+}
+
+.kill-feed li {
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  animation: feed-in 0.25s ease-out;
+}
+
+.kill-feed li.you {
+  background: rgb(150 40 30 / 0.7);
+}
+
+@keyframes feed-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+/* --- Death screen ---------------------------------------------------------------- */
+
+.death-screen {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  width: min(440px, calc(100% - 32px));
+  padding: 18px 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 16px;
+  background: rgb(40 12 10 / 0.8);
+  text-align: center;
+  animation: death-in 0.3s ease-out;
+}
+
+.death-screen h2 {
+  margin: 0 0 6px;
+  font-size: 1.35rem;
+}
+
+.death-screen p {
+  margin: 4px 0 0;
+}
+
+.death-countdown {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+@keyframes death-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -40%);
+  }
+}
+
+/* --- Touch sprint button --------------------------------------------------------- */
+
+.sprint-button {
+  position: absolute;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: calc(var(--safe-bottom) + 24px);
+  width: 84px;
+  height: 84px;
+  border: 2px solid rgb(255 255 255 / 0.6);
+  border-radius: 50%;
+  background: rgb(230 120 30 / 0.55);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.sprint-button.active {
+  background: rgb(255 150 50 / 0.85);
+  transform: scale(0.94);
+}
+
 /* --- Controls hint ------------------------------------------------------------ */
 
 .controls-hint {
