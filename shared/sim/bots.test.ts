@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { BOTS, FERNS } from '../config.ts';
-import { biteTouches, bodyRadius } from '../eating.ts';
-import { stepMotion } from '../movement.ts';
+import { attackZone, biteTouches, bodyRadius, zoneTouches } from '../eating.ts';
+import { type PlayerInput, stepLocomotion } from '../movement.ts';
 import { createRandom, type Random } from '../random.ts';
 import { FERN_PATCHES } from '../world/layout.ts';
 import { type BotBrain, botInput, createBotBrain } from './bots.ts';
-import type { Dino, EggSlot, WorldSenses } from './entities.ts';
+import type { Carcass, Dino, EggSlot, WorldSenses } from './entities.ts';
 
 const TICK = 1 / 20;
 /** A random source that always says 0.5: no distractions, no wobble, average everything. */
@@ -22,20 +22,50 @@ function dino(id: number, x: number, z: number, mass = 10, heading = 0): Dino {
     speed: 0,
     pushX: 0,
     pushZ: 0,
+    stamina: 1,
+    winded: false,
+    refillIn: 0,
+    sprinting: false,
     mass,
     alive: true,
     respawnIn: 0,
     protectedFor: 0,
-    sprinting: false,
-    meatOwed: 0,
-    meatCooldown: 0,
+    biteCooldown: 0,
+    carryingId: null,
+    carrying: false,
+    eating: false,
     eatenBy: null,
     massAtDeath: 0,
+    rankAtDeath: 0,
+    rank: 0,
   };
 }
 
-function senses(dinos: Dino[], eggs: EggSlot[] = []): WorldSenses {
-  return { dinos: new Map(dinos.map((d) => [d.id, d])), eggs, meat: new Map(), critters: [] };
+function senses(dinos: Dino[], eggs: EggSlot[] = [], carcasses: Carcass[] = []): WorldSenses {
+  return {
+    dinos: new Map(dinos.map((d) => [d.id, d])),
+    eggs,
+    meat: new Map(),
+    critters: [],
+    carcasses: new Map(carcasses.map((c) => [c.id, c])),
+  };
+}
+
+function carcass(id: number, x: number, z: number, food: number, kind: Carcass['kind']): Carcass {
+  return {
+    id,
+    x,
+    z,
+    heading: 0,
+    food,
+    size: food,
+    radius: 2.4,
+    kind,
+    carrierId: null,
+    age: 0,
+    lifetime: 120,
+    happeningId: kind === 'event' ? 1 : null,
+  };
 }
 
 /** Let the brain drive `self` with the real movement step until `done` (or time runs out). */
@@ -46,10 +76,12 @@ function drive(
   seconds: number,
   done: () => boolean = () => false,
   random: Random = steady,
+  onInput: (input: PlayerInput) => void = () => undefined,
 ): boolean {
   for (let t = 0; t < seconds; t += TICK) {
     const input = botInput(brain, self, world, random, TICK);
-    Object.assign(self, stepMotion(self, input, { mass: self.mass, terrainFactor: 1 }, TICK));
+    onInput(input);
+    stepLocomotion(self, input, TICK);
     if (done()) return true;
   }
   return false;
@@ -68,17 +100,107 @@ describe('bots', () => {
     expect(Math.hypot(self.x - threat.x, self.z - threat.z)).toBeGreaterThan(6 + 15);
   });
 
-  it('hunt smaller dinosaurs and catch ones that stand still', () => {
+  it('hunt smaller dinosaurs and bite ones in reach', () => {
     const self = dino(1, 60, 0, 50);
     const prey = dino(2, 66, 10);
     const brain = createBotBrain(steady, 0.9);
+    let bitInReach = false;
 
-    const caught = drive(brain, self, senses([self, prey]), 4, () =>
-      biteTouches(self, self.mass, prey.x, prey.z, bodyRadius(prey.mass)),
+    drive(
+      brain,
+      self,
+      senses([self, prey]),
+      4,
+      () => bitInReach,
+      steady,
+      (input) => {
+        const inReach = zoneTouches(
+          attackZone(self, self.mass),
+          prey.x,
+          prey.z,
+          bodyRadius(prey.mass),
+        );
+        if (input.bite) bitInReach = inReach;
+      },
     );
 
-    expect(caught).toBe(true);
+    expect(bitInReach).toBe(true);
     expect(brain.mode).toBe('hunt');
+  });
+
+  it('stop and eat the carcass in their mouth', () => {
+    const self = dino(1, 60, 0, 50);
+    self.carrying = true;
+    self.carryingId = 7;
+    const brain = createBotBrain(steady, 0.5);
+    const meal = carcass(7, 60, 1, 20, 'kill');
+    meal.carrierId = self.id;
+    let last: PlayerInput | undefined;
+    const record = (input: PlayerInput) => {
+      last = input;
+    };
+    drive(brain, self, senses([self], [], [meal]), 1, () => false, steady, record);
+    expect(last).toMatchObject({ eat: true, bite: false, throttle: 0 });
+    expect(brain.mode).toBe('feed');
+    expect(self.speed).toBe(0);
+  });
+
+  it('head for a world-event carcass they hear about, and eat once they reach it', () => {
+    const self = dino(1, 60, 0, 30);
+    const feast = carcass(3, 60, 70, 200, 'event');
+    const egg = { x: 64, z: -4, alive: true, respawnIn: 0 };
+    const brain = createBotBrain(steady, 0.6);
+    let eating = false;
+    drive(
+      brain,
+      self,
+      senses([self], [egg], [feast]),
+      15,
+      () => eating,
+      steady,
+      (input) => {
+        eating = input.eat;
+      },
+    );
+    expect(brain.mode).toBe('feed');
+    expect(eating).toBe(true);
+    expect(zoneTouches(attackZone(self, self.mass), feast.x, feast.z, feast.radius)).toBe(true);
+  });
+
+  it('shove a rival their size off the carcass they are eating', () => {
+    const self = dino(1, 60, 0, 30);
+    const feast = carcass(3, 60, 3, 200, 'event');
+    const rival = dino(2, 61.2, 1.4, 31, Math.PI);
+    const brain = createBotBrain(steady, 0.9);
+    let shoved = false;
+    const record = (input: PlayerInput) => {
+      shoved = input.bite;
+    };
+    const world = senses([self, rival], [], [feast]);
+    drive(brain, self, world, 3, () => shoved, createRandom(3), record);
+    expect(shoved).toBe(true);
+  });
+
+  it("don't sprint while winded", () => {
+    const self = dino(1, 60, 0, 30);
+    self.winded = true;
+    self.stamina = 0.1;
+    const threat = dino(2, 63, 0, 100);
+    const brain = createBotBrain(steady, 0.9);
+    let sprinted = false;
+    drive(
+      brain,
+      self,
+      senses([self, threat]),
+      1,
+      () => sprinted,
+      steady,
+      (input) => {
+        sprinted ||= input.sprint && self.winded;
+      },
+    );
+    expect(brain.mode).toBe('flee');
+    expect(sprinted).toBe(false);
   });
 
   it('leave protected dinosaurs alone', () => {
@@ -182,8 +304,7 @@ describe('bots', () => {
     const brain = createBotBrain(steady, 0.9);
     let gaveUp = false;
     for (let t = 0; t < BOTS.chaseGiveUpSeconds + 2 && !gaveUp; t += TICK) {
-      const input = botInput(brain, self, world, steady, TICK);
-      Object.assign(self, stepMotion(self, input, { mass: self.mass, terrainFactor: 1 }, TICK));
+      stepLocomotion(self, botInput(brain, self, world, steady, TICK), TICK);
       // The prey always stays 15 units ahead.
       prey.x = self.x + Math.sin(self.heading) * 15;
       prey.z = self.z + Math.cos(self.heading) * 15;

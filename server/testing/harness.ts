@@ -4,15 +4,15 @@ import {
   IDLE_INPUT,
   type JoinOptions,
   MESSAGE,
-  type MoveInput,
   type NetEvent,
+  type PlayerInput,
   ROOM_NAME,
   type TestCommand,
   toWireInput,
   type WireInput,
 } from '@extinct/shared';
 import { createGameServer, type GameServerOptions } from '../app.ts';
-import { type DinoState, GameState } from '../rooms/schema.ts';
+import { type CarcassState, type DinoState, GameState } from '../rooms/schema.ts';
 
 /** A game server listening on a free port. */
 export interface TestServer {
@@ -63,7 +63,13 @@ export class TestClient {
   /** Set once the connection has closed, for whatever reason. */
   left = false;
   private readonly input: InputHandle<WireInput>;
-  private readonly wire: WireInput = { turn: 0, throttle: 0, sprint: false };
+  private readonly wire: WireInput = {
+    turn: 0,
+    throttle: 0,
+    sprint: false,
+    bite: false,
+    eat: false,
+  };
 
   private constructor(room: Awaited<ReturnType<typeof joinGame>>) {
     this.room = room;
@@ -113,12 +119,21 @@ export class TestClient {
   }
 
   /** Send one tick of input. */
-  send(input: MoveInput = IDLE_INPUT): void {
+  send(input: PlayerInput = IDLE_INPUT): void {
     toWireInput(input, this.wire);
     this.input.data.turn = this.wire.turn;
     this.input.data.throttle = this.wire.throttle;
     this.input.data.sprint = this.wire.sprint;
+    this.input.data.bite = this.wire.bite;
+    this.input.data.eat = this.wire.eat;
     this.input.send();
+  }
+
+  /** The carcasses it can see. */
+  carcasses(): CarcassState[] {
+    const list: CarcassState[] = [];
+    this.room.state.carcasses.forEach((carcass) => list.push(carcass));
+    return list;
   }
 
   /** Inputs the server has applied so far. */

@@ -31,3 +31,13 @@ export const BOT_NAMES = [
   'Clover',
   'Jasper',
 ] as const;
+
+/** Big plant-eaters whose carcasses turn up as world events, worth fighting over. */
+export const CARCASS_SPECIES = [
+  'Brachiosaurus',
+  'Triceratops',
+  'Stegosaurus',
+  'Ankylosaurus',
+  'Parasaurolophus',
+  'Diplodocus',
+] as const;

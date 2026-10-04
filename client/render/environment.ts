@@ -14,13 +14,21 @@ import type { QualitySettings } from './quality.ts';
 
 const SKY_ZENITH = new Color(0x3d9be9);
 const SKY_HORIZON = new Color(0xcdeeff);
+/** The apocalyptic sky of the meteor's last minute (BUILD_PROMPT.md §6). */
+const DOOM_ZENITH = new Color(0x4a0d0b);
+const DOOM_HORIZON = new Color(0xff7040);
+const DOOM_SUN = new Color(0xff8a50);
+const DAY_SUN = new Color(0xfff1dc);
+const DAY_AMBIENT = 1.35;
+const DOOM_AMBIENT = 0.8;
+const WHITE = new Color(0xffffff);
 
 /** Gradient sky dome that follows the camera. Its horizon colour is also the fog colour. */
 export function createSky(): Mesh {
   const material = new ShaderMaterial({
     uniforms: {
-      zenithColor: { value: SKY_ZENITH },
-      horizonColor: { value: SKY_HORIZON },
+      zenithColor: { value: SKY_ZENITH.clone() },
+      horizonColor: { value: SKY_HORIZON.clone() },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDirection;
@@ -49,12 +57,35 @@ export function createSky(): Mesh {
 }
 
 export function createFog(): Fog {
-  return new Fog(SKY_HORIZON, 40, 140);
+  return new Fog(SKY_HORIZON.clone(), 40, 140);
 }
 
 /** Soft sky/ground fill light. */
 export function createAmbientLight(): HemisphereLight {
-  return new HemisphereLight(0xd7f0ff, 0x5b7a3a, 1.35);
+  return new HemisphereLight(0xd7f0ff, 0x5b7a3a, DAY_AMBIENT);
+}
+
+/**
+ * Turn the day apocalyptic as the meteor nears: `doom` 0 is a clear day, 1 a red sky. A white
+ * `flash` (0 to 1) washes over it at impact.
+ */
+export function setDoom(
+  parts: { sky: Mesh; fog: Fog; ambient: HemisphereLight; sun: Sun },
+  doom: number,
+  flash = 0,
+): void {
+  const uniforms = (parts.sky.material as ShaderMaterial).uniforms;
+  const zenith = uniforms.zenithColor.value as Color;
+  const horizon = uniforms.horizonColor.value as Color;
+  zenith.copy(SKY_ZENITH).lerp(DOOM_ZENITH, doom);
+  horizon.copy(SKY_HORIZON).lerp(DOOM_HORIZON, doom);
+  if (flash > 0) {
+    zenith.lerp(WHITE, flash);
+    horizon.lerp(WHITE, flash);
+  }
+  parts.fog.color.copy(horizon);
+  parts.ambient.intensity = DAY_AMBIENT + (DOOM_AMBIENT - DAY_AMBIENT) * doom + 2 * flash;
+  parts.sun.light.color.copy(DAY_SUN).lerp(DOOM_SUN, doom);
 }
 
 /**

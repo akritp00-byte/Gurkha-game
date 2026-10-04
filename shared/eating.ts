@@ -1,4 +1,4 @@
-import { BITE, BODY, EATING } from './config.ts';
+import { BITE, BITING, BODY, CARCASS, EATING } from './config.ts';
 import { biteCenter, type Motion } from './movement.ts';
 import { scaleForMass } from './tiers.ts';
 
@@ -35,6 +35,20 @@ export function biteZone(eater: Pick<Motion, 'x' | 'z' | 'heading'>, eaterMass: 
   return { x: centre.x, z: centre.z, radius: biteRadius(eaterMass) };
 }
 
+/**
+ * Where an aimed bite (a click) lands: further out and wider than the mouth touching food, so it
+ * doesn't need pixel-perfect contact.
+ */
+export function attackZone(eater: Pick<Motion, 'x' | 'z' | 'heading'>, eaterMass: number): Circle {
+  const scale = scaleForMass(eaterMass);
+  const reach = (BITE.reach + BITING.extraReach) * scale;
+  return {
+    x: eater.x + Math.sin(eater.heading) * reach,
+    z: eater.z + Math.cos(eater.heading) * reach,
+    radius: BITE.radius * BITING.radiusMultiplier * scale,
+  };
+}
+
 /** Whether a bite zone touches a circle of `radius` at (x, z). Touching edges count. */
 export function zoneTouches(zone: Circle, x: number, z: number, radius: number): boolean {
   const reach = zone.radius + radius;
@@ -54,9 +68,24 @@ export function biteTouches(
   return zoneTouches(biteZone(eater, eaterMass), x, z, radius);
 }
 
-/** Mass gained by eating a dinosaur: 70% of the victim's mass (BUILD_PROMPT.md §3). */
+/** Food in a kill's carcass: 70% of the victim's mass (BUILD_PROMPT.md §3). */
 export function massGained(victimMass: number): number {
   return victimMass * EATING.massGainFraction;
+}
+
+/** Mass per second a dinosaur eats from a carcass while holding E: more for bigger mouths. */
+export function eatRate(mass: number): number {
+  return Math.min(CARCASS.maxEatRate, Math.max(CARCASS.minEatRate, mass * CARCASS.eatRatePerMass));
+}
+
+/** Whether a dinosaur can pick up a carcass holding this much food. Huge ones are eaten where they lie. */
+export function canCarry(mass: number, food: number): boolean {
+  return food <= mass * CARCASS.carryCapacity;
+}
+
+/** Radius of the carcass a dinosaur of this mass leaves behind. */
+export function killCarcassRadius(victimMass: number): number {
+  return bodyRadius(victimMass) * CARCASS.killRadiusScale;
 }
 
 export type Threat = 'danger' | 'prey' | 'neutral';

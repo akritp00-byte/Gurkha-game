@@ -2,6 +2,61 @@
 
 One entry per milestone (BUILD_PROMPT.md §9), newest first.
 
+## M4: Round loop, plus bites, carcasses, events and danger zones (2026-10-04)
+
+M4 also changes the core rules, as asked after M3: progression felt slow and stale.
+
+### Added
+
+- **The round loop.**
+  - Rounds last 5 minutes, shown by a clock at the top of the screen.
+  - At 4:00 the meteor warning starts: the sky turns red, a fireball crosses it towards the volcano, burning debris falls and the ground rumbles.
+  - At 5:00 the meteor hits: a white flash, a shockwave and a hard shake, and everything freezes for 3 seconds.
+  - Then a podium shows the three biggest dinosaurs alive at impact, and how you did. Ten seconds later everyone hatches again on a fresh island.
+- **Leaderboard and minimap.**
+  - A top-10 leaderboard, with your own place below it when you're not in it.
+  - The minimap shows the danger zones, fern patches, world events, the top three (unless they're hidden in ferns) and you.
+  - The server sends these to everyone, alongside the nearby-only state.
+- **Bite to kill.** A dinosaur at least 1.2× bigger no longer eats on contact.
+  - Left click (or Space, or the Bite button on phones) bites. An aimed bite reaches a little further and wider than the mouth, and has a 0.4 s cooldown.
+  - A bite kills anything 1.2× smaller in reach and leaves its carcass in your mouth.
+  - Biting a dinosaur too close in size to kill shoves it away and knocks loose whatever it carries, so equals can fight over food. A bite does nothing to anything bigger than you.
+- **Carcasses.** A kill's carcass holds 70% of the victim's mass as food.
+  - You carry it in your mouth (20% slower) and hold E (or the Eat button) to eat it, gaining mass as you go (half speed while eating). Bigger mouths eat faster.
+  - Biting again drops it, and dying drops it too. Anyone can pick up a dropped carcass that fits in their mouth, or eat from it where it lies.
+  - Carcasses on the ground rot after 45 s.
+- **Random world events**, every 25–45 s, announced to everyone with a banner, a light pillar and a minimap marker.
+  - A huge plant-eater carcass (a Triceratops, a Brachiosaurus and so on) worth 50–90 food, too big to carry, so everyone eats it where it lies and fights over it.
+  - Or a scatter of meat a pterosaur dropped.
+  - Events grow through the round, up to 2.5× by the meteor.
+- **Danger zones.** The volcano's slopes (the Ashlands, where the vents erupt) and the burnt ground round the tar pits.
+  - Eggs, meat and critters there are worth 4× and 3×, and the eggs there are golden.
+  - Half of all world events land in a danger zone, and they're 3–4× bigger there.
+  - The ground is tinted, and a HUD chip says what food is worth.
+- **Interface.** A stamina bar, HUD chips for carrying, eating and danger zones, and your rank on the death card ("You were #4…"). The kill feed and death card now say "caught".
+- **Test hooks.** `?round=N` plays N-second rounds (offline, or on a test server). `window.__extinct` adds `startEvent()`, `leaderboard()`, `podium()` and `carcasses()`, and `placeDinoAhead(..., still)` places a bot that stands still.
+- **Tests.**
+  - 138 unit tests: bites and carcasses, stamina, danger zones, world events, the round loop and podium, critters a hunter can catch, and bots that bite, eat and crowd round events. A whole round with 16 bots now plays through the meteor, the podium and a reset without errors.
+  - Server tests: a whole short round with its podium, world events announced to everyone, and carcasses in a hidden dinosaur's mouth staying hidden.
+  - Browser tests: the M4 check (a full round completes and the correct winner is shown), click-bite-carry-eat on desktop and with the touch buttons, eating an event carcass, danger zones, and the two-tab game with bites.
+  - The load test still holds 20 ticks per second with 30 players and 16 bots: ticks average about 4 ms, the slowest about 17 ms.
+
+### Changed
+
+- **Sprinting uses stamina instead of mass.** A full bar lasts 4 s and refills over 5 s after a short rest. Run it dry and you're winded until it's back to 30%. Sprinting no longer drops meat, and a fresh hatchling can sprint too. Burning mass undid progress, which already felt slow.
+- **Mouse steering moved to the right button**, since a left click bites.
+- **Critters are easier to catch.** They're slower (6.2 instead of 7.5), notice you later and zigzag less. They also tire after a 2.5 s bolt and trot for 1.5 s, so even a young Velociraptor can run one down.
+- **Fleeing bots are a little clumsier.** Clumsy bots notice threats later, and every bot now runs out of stamina.
+- Bots bite (not always at the right moment), carry and eat their kills, head for world-event carcasses and shove rivals off them, and save stamina for when it counts.
+- The kill event is now `dinoKilled` (with the victim's rank). Inputs carry `bite` and `eat`, and a late packet's repeated input never repeats a bite.
+
+### Known issues
+
+- Bites aren't lag-compensated: online, you aim at where other dinosaurs were 100 ms ago, plus half your ping. The wider aimed bite covers small pings; rewinding targets on the server could come later.
+- E now eats, but the brief puts the tier abilities on E (M6), so the ability key needs choosing then (Q, say).
+- The death card has no Play Again button yet: you hatch again automatically after 3 s. That comes with the landing screen in M7.
+- The meteor, debris, shockwave, carcasses and light pillars are placeholders until the art pass (M5).
+
 ## M3: Multiplayer (2026-10-04)
 
 ### Added

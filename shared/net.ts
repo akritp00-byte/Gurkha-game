@@ -1,5 +1,7 @@
 import { clamp } from './math.ts';
-import type { MoveInput } from './movement.ts';
+import type { PlayerInput } from './movement.ts';
+import type { HappeningKind } from './sim/entities.ts';
+import type { DangerZoneId } from './world/layout.ts';
 
 /**
  * The client–server protocol (BUILD_PROMPT.md §5). Room state itself is a Colyseus schema in
@@ -17,13 +19,15 @@ export const MESSAGE = {
   test: 'test',
 } as const;
 
-/** Options a client joins with. `bots` and `seed` only count on a test server. */
+/** Options a client joins with. `bots`, `seed` and `roundSeconds` only count on a test server. */
 export interface JoinOptions {
   name?: string;
   /** Join (or create) the room with this tag, e.g. one per browser test. */
   room?: string;
   bots?: number;
   seed?: number;
+  /** Round length, so browser tests can play a whole round quickly. */
+  roundSeconds?: number;
 }
 
 /**
@@ -36,17 +40,21 @@ export interface WireInput {
   turn: number;
   throttle: number;
   sprint: boolean;
+  bite: boolean;
+  eat: boolean;
 }
 
-export function toWireInput(input: MoveInput, out: WireInput): WireInput {
+export function toWireInput(input: PlayerInput, out: WireInput): WireInput {
   out.turn = Math.round(clamp(input.turn, -1, 1) * WIRE_INPUT.turn);
   out.throttle = Math.round(clamp(input.throttle, 0, 1) * WIRE_INPUT.throttle);
   out.sprint = input.sprint;
+  out.bite = input.bite;
+  out.eat = input.eat;
   return out;
 }
 
 /** Decode a wire input; anything malformed counts as no input. */
-export function fromWireInput(wire: { readonly [K in keyof WireInput]?: unknown }): MoveInput {
+export function fromWireInput(wire: { readonly [K in keyof WireInput]?: unknown }): PlayerInput {
   const turn = typeof wire.turn === 'number' && Number.isFinite(wire.turn) ? wire.turn : 0;
   const throttle =
     typeof wire.throttle === 'number' && Number.isFinite(wire.throttle) ? wire.throttle : 0;
@@ -54,24 +62,49 @@ export function fromWireInput(wire: { readonly [K in keyof WireInput]?: unknown 
     turn: clamp(turn / WIRE_INPUT.turn, -1, 1),
     throttle: clamp(throttle / WIRE_INPUT.throttle, 0, 1),
     sprint: wire.sprint === true,
+    bite: wire.bite === true,
+    eat: wire.eat === true,
   };
+}
+
+/** Kinds and zones travel as small numbers: their index in these lists. */
+export const CARCASS_KIND_CODES = ['kill', 'event'] as const;
+export const HAPPENING_KIND_CODES = [
+  'carcass',
+  'meatDrop',
+] as const satisfies readonly HappeningKind[];
+export const ZONE_CODES = [
+  null,
+  'ashlands',
+  'tarPits',
+] as const satisfies readonly (DangerZoneId | null)[];
+
+export function zoneCode(zone: DangerZoneId | null): number {
+  return ZONE_CODES.indexOf(zone);
+}
+
+export function zoneFromCode(code: number): DangerZoneId | null {
+  return ZONE_CODES[code] ?? null;
 }
 
 /** Events the server sends a client after a tick: only those it should hear about. */
 export type NetEvent =
-  /** A dinosaur this client can see ate some food. */
+  /** A dinosaur this client can see bit something, or ate some food. */
   | { readonly type: 'bite'; readonly dinoId: number }
   /** Sent to everyone, for the kill feed; names travel along since the dinosaurs may be out of view. */
   | {
-      readonly type: 'dinoEaten';
-      readonly eaterId: number;
+      readonly type: 'dinoKilled';
+      readonly killerId: number;
       readonly victimId: number;
-      readonly eaterName: string;
+      readonly killerName: string;
       readonly victimName: string;
-      /** The eater's mass after the meal, and the victim's when it was eaten. */
-      readonly eaterMass: number;
+      /** Both masses at the moment of the kill, and the victim's place on the leaderboard. */
+      readonly killerMass: number;
       readonly victimMass: number;
+      readonly victimRank: number;
     }
+  /** A bite knocked this dinosaur back (and loose of anything it carried). */
+  | { readonly type: 'shoved'; readonly dinoId: number; readonly byId: number }
   | { readonly type: 'dinoSpawned'; readonly dinoId: number }
   /** Only to the dinosaur's own player. */
   | {
@@ -80,13 +113,30 @@ export type NetEvent =
       readonly tier: number;
       readonly previousTier: number;
     }
-  | { readonly type: 'ventErupted'; readonly vent: number };
+  | { readonly type: 'ventErupted'; readonly vent: number }
+  /** A world event started (to everyone, for the announcement). */
+  | {
+      readonly type: 'happening';
+      readonly id: number;
+      readonly kind: HappeningKind;
+      /** Which carcass species (an index into CARCASS_SPECIES). */
+      readonly variant: number;
+      readonly x: number;
+      readonly z: number;
+      readonly zone: DangerZoneId | null;
+      readonly food: number;
+    }
+  | { readonly type: 'meteorWarning' }
+  | { readonly type: 'meteorImpact' }
+  | { readonly type: 'roundStarted'; readonly round: number };
 
 /** Test commands, for browser tests against a dev server. They act on the sender's own dinosaur. */
 export type TestCommand =
   | { readonly cmd: 'setMass'; readonly mass: number }
   | { readonly cmd: 'teleport'; readonly x: number; readonly z: number; readonly heading?: number }
-  | { readonly cmd: 'endProtection' };
+  | { readonly cmd: 'endProtection' }
+  /** Start a world event this many units in front of the dinosaur (or somewhere random). */
+  | { readonly cmd: 'startEvent'; readonly kind: HappeningKind; readonly ahead?: number };
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
@@ -125,9 +175,19 @@ export interface NetDino {
   readonly sprinting: boolean;
   readonly protectedFor: number;
   readonly respawnIn: number;
-  /** Id of whoever ate it last, 0 if nobody. */
+  /** Id of whoever killed it last, 0 if nobody. */
   readonly eatenBy: number;
   readonly massAtDeath: number;
+  /** Leaderboard place when it was killed. */
+  readonly rankAtDeath: number;
+  /** Place on the leaderboard (1 is the biggest), 0 while dead. */
+  readonly rank: number;
+  readonly stamina: number;
+  readonly winded: boolean;
+  readonly refillIn: number;
+  /** Has a carcass in its mouth. */
+  readonly carrying: boolean;
+  readonly eating: boolean;
 }
 
 export interface NetEgg {
@@ -149,4 +209,51 @@ export interface NetCritter {
   readonly heading: number;
   readonly speed: number;
   readonly alive: boolean;
+}
+
+/** A carcass, carried or on the ground. `kind` and `carrier` are codes (see CARCASS_KIND_CODES). */
+export interface NetCarcass {
+  readonly x: number;
+  readonly z: number;
+  readonly heading: number;
+  readonly food: number;
+  /** Food it started with. */
+  readonly size: number;
+  readonly radius: number;
+  readonly kind: number;
+  /** Id of the dinosaur carrying it, 0 if it's on the ground. */
+  readonly carrier: number;
+}
+
+/** A running world event, sent to everyone for the minimap. */
+export interface NetHappening {
+  readonly kind: number;
+  readonly variant: number;
+  readonly x: number;
+  readonly z: number;
+  readonly zone: number;
+  readonly food: number;
+}
+
+/** A place on the leaderboard or the podium. Leaders' positions are coarse, for the minimap. */
+export interface NetStanding {
+  readonly dino: number;
+  readonly name: string;
+  readonly mass: number;
+  readonly bot: boolean;
+  readonly x: number;
+  readonly z: number;
+  /** Whether the minimap may show it (dinosaurs hidden in ferns stay off it). */
+  readonly shown: boolean;
+}
+
+/** The round: its number, the tick it started on, its timings, and once it's over, the podium. */
+export interface NetRound {
+  readonly number: number;
+  readonly startTick: number;
+  readonly durationSeconds: number;
+  readonly meteorWarningAtSeconds: number;
+  readonly impactSequenceSeconds: number;
+  readonly intermissionSeconds: number;
+  readonly podium: ArrayLike<NetStanding>;
 }

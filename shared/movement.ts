@@ -1,6 +1,7 @@
-import { BITE, MASS, MOVEMENT, PUSH, SPRINT, WORLD } from './config.ts';
+import { BITE, CARCASS, MOVEMENT, PUSH, SPRINT, STAMINA, WORLD } from './config.ts';
 import { clamp } from './math.ts';
 import { VOLCANO } from './world/layout.ts';
+import { terrainSpeedFactor } from './world/terrain.ts';
 
 /** Where a dinosaur is and how it's moving. Movement happens on the ground plane (x, z). */
 export interface Motion {
@@ -19,23 +20,71 @@ export interface Motion {
   readonly pushZ: number;
 }
 
-/** One tick of player or bot intent. This is what clients send to the server. */
+/** The steering part of a tick's input: what the movement step reads. */
 export interface MoveInput {
   /** Steering from -1 (full right) to 1 (full left). */
   readonly turn: number;
   /** 0 stands still, 1 runs at full speed. */
   readonly throttle: number;
-  /** Run 1.6× faster, burning mass. */
+  /** Run 1.6× faster, spending stamina. */
   readonly sprint: boolean;
 }
 
-export const IDLE_INPUT: MoveInput = { turn: 0, throttle: 0, sprint: false };
+/** One tick of player or bot intent. This is what clients send to the server. */
+export interface PlayerInput extends MoveInput {
+  /** Bite this tick (one click): kill, grab a carcass, drop one, or shove a rival. */
+  readonly bite: boolean;
+  /** Held: eat the carcass in your mouth, or one on the ground in front of you. */
+  readonly eat: boolean;
+}
+
+export const IDLE_INPUT: PlayerInput = {
+  turn: 0,
+  throttle: 0,
+  sprint: false,
+  bite: false,
+  eat: false,
+};
 
 /** What a movement step needs to know beyond the dinosaur's own motion. */
 export interface StepConditions {
   readonly mass: number;
   /** Top-speed multiplier from the ground underfoot (`terrainSpeedFactor`), 1 on open ground. */
   readonly terrainFactor: number;
+  /** Top-speed multiplier for carrying a carcass and eating (`loadFactor`), 1 for neither. */
+  readonly loadFactor: number;
+}
+
+/** A sprint bar: 0 to 1, refilling after a pause; run it dry and you're winded for a while. */
+export interface Stamina {
+  readonly stamina: number;
+  /** Ran out of stamina and can't sprint until it's back to STAMINA.minToSprint. */
+  readonly winded: boolean;
+  /** Seconds before a resting bar starts refilling. */
+  readonly refillIn: number;
+}
+
+export const FULL_STAMINA: Stamina = { stamina: 1, winded: false, refillIn: 0 };
+
+/**
+ * Everything one movement tick reads and writes on a dinosaur. The server's GameWorld and the
+ * client's prediction both step this with `stepLocomotion`, so they always agree.
+ */
+export interface Locomotion {
+  x: number;
+  z: number;
+  heading: number;
+  speed: number;
+  pushX: number;
+  pushZ: number;
+  stamina: number;
+  winded: boolean;
+  refillIn: number;
+  /** Sprinting this tick: holding sprint while moving, with stamina to spend. */
+  sprinting: boolean;
+  readonly mass: number;
+  /** Has a carcass in its mouth. */
+  readonly carrying: boolean;
 }
 
 /** Pushes slower than this stop instead of fading forever. */
@@ -57,33 +106,83 @@ export function turnRateForMass(mass: number): number {
   );
 }
 
-/** Sprinting burns mass, so a dinosaur at the minimum mass has nothing left to sprint with. */
-export function canSprint(mass: number): boolean {
-  return mass > MASS.minimum;
+/** Whether this stamina allows a sprint: not winded, and something left in the bar. */
+export function canSprint(stamina: Stamina): boolean {
+  return !stamina.winded && stamina.stamina > 0;
 }
 
-/** Whether a dinosaur sprints this tick: holding sprint while moving, with mass to burn. */
-export function isSprinting(input: MoveInput, mass: number): boolean {
-  return input.sprint && input.throttle > 0 && canSprint(mass);
+/**
+ * One tick of the sprint bar. Sprinting drains it, and running it dry leaves you winded.
+ * Otherwise it refills after a short pause, and you get your breath back at STAMINA.minToSprint.
+ */
+export function stepStamina(state: Stamina, sprinting: boolean, dt: number): Stamina {
+  if (sprinting) {
+    const stamina = state.stamina - dt / STAMINA.sprintSeconds;
+    return stamina > 0
+      ? { stamina, winded: false, refillIn: STAMINA.refillDelaySeconds }
+      : { stamina: 0, winded: true, refillIn: STAMINA.refillDelaySeconds };
+  }
+  if (state.refillIn > 0) {
+    return {
+      stamina: state.stamina,
+      winded: state.winded,
+      refillIn: Math.max(0, state.refillIn - dt),
+    };
+  }
+  const stamina = Math.min(1, state.stamina + dt / STAMINA.refillSeconds);
+  return { stamina, winded: state.winded && stamina < STAMINA.minToSprint, refillIn: 0 };
 }
 
-/** Mass a sprinting dinosaur burns in `dt` seconds: 1.5% a second, never going below the minimum. */
-export function sprintBurn(mass: number, dt: number): number {
-  return Math.min(mass - MASS.minimum, mass * SPRINT.massLossPerSecond * dt);
+/** Top-speed multiplier for carrying a carcass and holding E to eat (they stack). */
+export function loadFactor(carrying: boolean, eating: boolean): number {
+  return (carrying ? CARCASS.carrySpeedFactor : 1) * (eating ? CARCASS.eatingSpeedFactor : 1);
+}
+
+/**
+ * One tick of a dinosaur's movement: the sprint bar, then motion over the ground underfoot.
+ * Pure and deterministic, so the server runs it with authority and the client runs exactly the
+ * same thing to predict its own dinosaur.
+ */
+export function stepLocomotion(body: Locomotion, input: PlayerInput, dt: number): void {
+  const { turn, throttle, sprint, eat } = sanitizeInput(input);
+  const sprinting = sprint && throttle > 0 && canSprint(body);
+  const stamina = stepStamina(body, sprinting, dt);
+  const next = stepMotion(
+    body,
+    { turn, throttle, sprint: sprinting },
+    {
+      mass: body.mass,
+      terrainFactor: terrainSpeedFactor(body.x, body.z),
+      loadFactor: loadFactor(body.carrying, eat),
+    },
+    dt,
+  );
+  body.x = next.x;
+  body.z = next.z;
+  body.heading = next.heading;
+  body.speed = next.speed;
+  body.pushX = next.pushX;
+  body.pushZ = next.pushZ;
+  body.stamina = stamina.stamina;
+  body.winded = stamina.winded;
+  body.refillIn = stamina.refillIn;
+  body.sprinting = sprinting;
 }
 
 /** Input from somewhere untrusted, such as the network: any field may hold anything. */
-export type RawInput = { readonly [K in keyof MoveInput]?: unknown };
+export type RawInput = { readonly [K in keyof PlayerInput]?: unknown };
 
 /**
  * Clamp untrusted input into range. A turn or throttle that isn't a finite number counts as
- * zero, and only `true` means sprint.
+ * zero, and only `true` means sprint, bite or eat.
  */
-export function sanitizeInput(input: RawInput): MoveInput {
+export function sanitizeInput(input: RawInput): PlayerInput {
   return {
     turn: numberIn(input.turn, -1, 1),
     throttle: numberIn(input.throttle, 0, 1),
     sprint: input.sprint === true,
+    bite: input.bite === true,
+    eat: input.eat === true,
   };
 }
 
@@ -92,8 +191,8 @@ function numberIn(value: unknown, min: number, max: number): number {
 }
 
 /**
- * Advance one dinosaur by `dt` seconds. Pure and deterministic: the server runs it with
- * authority, and the client runs the same function to predict its own dinosaur.
+ * Advance one dinosaur's motion by `dt` seconds, sprinting if `input.sprint` says so (the
+ * caller checks stamina: see `stepLocomotion`). Pure and deterministic.
  */
 export function stepMotion(
   motion: Motion,
@@ -102,12 +201,12 @@ export function stepMotion(
   dt: number,
 ): Motion {
   const { turn, throttle, sprint } = sanitizeInput(input);
-  const { mass, terrainFactor } = conditions;
+  const { mass, terrainFactor, loadFactor: load } = conditions;
   const heading = motion.heading + turn * turnRateForMass(mass) * dt;
 
   const baseSpeed = speedForMass(mass);
-  const sprintFactor = sprint && canSprint(mass) ? SPRINT.speedMultiplier : 1;
-  const targetSpeed = throttle * baseSpeed * sprintFactor * terrainFactor;
+  const sprintFactor = sprint ? SPRINT.speedMultiplier : 1;
+  const targetSpeed = throttle * baseSpeed * sprintFactor * terrainFactor * load;
   const rampSeconds =
     targetSpeed > motion.speed ? MOVEMENT.accelerationSeconds : MOVEMENT.decelerationSeconds;
   const maxChange = (baseSpeed * dt) / rampSeconds;

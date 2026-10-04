@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { FOOD, MASS, MEAT, NETWORK, ROOM, ROUND, VENTS, WORLD } from '../config.ts';
-import type { MoveInput } from '../movement.ts';
+import type { PlayerInput } from '../movement.ts';
 import { VOLCANO, VOLCANO_VENTS } from '../world/layout.ts';
 import type { Dino } from './entities.ts';
 import { GameWorld } from './world.ts';
 
 const TICK = 1 / NETWORK.tickRate;
-const NO_INPUT = new Map<number, MoveInput>();
+const NO_INPUT = new Map<number, PlayerInput>();
 const EPSILON = 1e-6;
 
 function checkDino(dino: Dino): void {
@@ -30,16 +30,31 @@ function snapshot(world: GameWorld): number[] {
 }
 
 describe('bots-only simulation', () => {
-  it('plays a 5-minute round with a full room of bots without errors', () => {
+  it('plays a whole round with a full room of bots, meteor and all, without errors', () => {
     const world = new GameWorld({ seed: 2026, bots: ROOM.minDinosaurs });
-    const ticks = ROUND.durationSeconds * NETWORK.tickRate;
-    let eaten = 0;
+    const roundSeconds =
+      ROUND.durationSeconds + ROUND.impactSequenceSeconds + ROUND.intermissionSeconds;
+    let killed = 0;
     let evolutions = 0;
+    const milestones: string[] = [];
+    let ventEruptions = 0;
 
-    for (let tick = 0; tick < ticks; tick++) {
+    for (let tick = 0; tick < (roundSeconds + 1) * NETWORK.tickRate; tick++) {
       for (const event of world.step(TICK, NO_INPUT)) {
-        if (event.type === 'dinoEaten') eaten++;
+        if (event.type === 'dinoKilled') killed++;
         if (event.type === 'tierChanged' && event.tier > event.previousTier) evolutions++;
+        if (event.type === 'ventErupted' && world.round.number === 1) ventEruptions++;
+        if (event.type === 'meteorWarning' || event.type === 'meteorImpact') {
+          milestones.push(event.type);
+        }
+        if (event.type === 'meteorImpact') {
+          // The podium is the three biggest live dinosaurs at the moment of impact.
+          const alive = [...world.dinos.values()].filter((d) => d.alive);
+          const biggest = Math.max(...alive.map((d) => d.mass));
+          expect(world.round.podium).toHaveLength(ROUND.podiumSize);
+          expect(world.round.podium[0].mass).toBe(biggest);
+        }
+        if (event.type === 'roundStarted') milestones.push(`round ${event.round}`);
       }
       if (tick % NETWORK.tickRate === 0) {
         // Once a simulated second, check that the world still makes sense.
@@ -54,18 +69,21 @@ describe('bots-only simulation', () => {
       }
     }
 
-    expect(world.time).toBeCloseTo(ROUND.durationSeconds);
+    expect(milestones).toEqual(['meteorWarning', 'meteorImpact', 'round 2']);
     expect(world.dinos.size).toBe(ROOM.minDinosaurs);
     for (const dino of world.dinos.values()) checkDino(dino);
-    // Bots ate, hunted, sprinted and grew, and the vents kept erupting.
+    // Bots ate, hunted, bit, carried and ate carcasses, and grew; events came and the vents kept
+    // erupting until the meteor froze everything.
     expect(world.stats.eggsEaten).toBeGreaterThan(200);
-    expect(eaten).toBe(world.stats.dinosEaten);
-    expect(eaten).toBeGreaterThan(3);
+    expect(killed).toBe(world.stats.dinosKilled);
+    expect(killed).toBeGreaterThan(3);
+    expect(world.stats.carcassesEaten).toBeGreaterThan(2);
     expect(evolutions).toBeGreaterThan(3);
-    expect(world.stats.meatDropped).toBeGreaterThan(0);
-    expect(world.stats.ventEruptions).toBe(
-      VOLCANO_VENTS.length * (ROUND.durationSeconds / VENTS.periodSeconds),
-    );
+    expect(world.stats.happenings).toBeGreaterThan(5);
+    // (A vent due to erupt on the very tick of impact stays frozen with everything else.)
+    const due = VOLCANO_VENTS.length * (ROUND.durationSeconds / VENTS.periodSeconds);
+    expect(ventEruptions).toBeGreaterThanOrEqual(due - 1);
+    expect(ventEruptions).toBeLessThanOrEqual(due);
   }, 60_000);
 
   it('replays exactly from the same seed', () => {

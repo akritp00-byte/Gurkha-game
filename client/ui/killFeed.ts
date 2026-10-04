@@ -7,7 +7,7 @@ interface Line {
   readonly addedAt: number;
 }
 
-/** Top-right list of who ate whom. Lines that involve you stand out. */
+/** Top-right list of who caught whom. Lines that involve you stand out. */
 export class KillFeed {
   private readonly root: HTMLElement;
   private readonly lines: Line[] = [];
@@ -27,10 +27,15 @@ export class KillFeed {
     eaterName.textContent = eater;
     const victimName = document.createElement('strong');
     victimName.textContent = victim;
-    element.append(eaterName, ' ate ', victimName);
+    element.append(eaterName, ' caught ', victimName);
     this.root.append(element);
     this.lines.push({ element, addedAt: now });
     while (this.lines.length > MAX_LINES) this.lines.shift()?.element.remove();
+  }
+
+  /** Start afresh, e.g. for a new round. */
+  clear(): void {
+    for (const line of this.lines.splice(0)) line.element.remove();
   }
 
   update(now: number): void {

@@ -34,7 +34,7 @@ test.describe('desktop', () => {
     );
   });
 
-  test('holding the mouse button runs towards the cursor', async ({ page }) => {
+  test('holding the right mouse button runs towards the cursor', async ({ page }) => {
     await openGame(page);
     const start = await gameState(page);
     const { width, height } = page.viewportSize() ?? { width: 1280, height: 720 };
@@ -43,8 +43,8 @@ test.describe('desktop', () => {
     const end = await holdUntil(
       page,
       (state) => distanceMoved(start, state) > 2,
-      () => page.mouse.down(),
-      () => page.mouse.up(),
+      () => page.mouse.down({ button: 'right' }),
+      () => page.mouse.up({ button: 'right' }),
     );
     expect(end.controls).toBe('mouse');
     expect(movedLeft(start, end)).toBeGreaterThan(0.2); // veered left, towards the cursor

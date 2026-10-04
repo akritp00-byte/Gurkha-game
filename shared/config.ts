@@ -12,7 +12,7 @@
 export const MASS = {
   /** Mass every dinosaur spawns and respawns with. */
   start: 10,
-  /** Mass never drops below this, even while sprinting. */
+  /** Mass never drops below this. */
   minimum: 10,
 } as const;
 
@@ -35,21 +35,98 @@ export const TIERS = [
   { tier: 5, species: 'T-Rex', minMass: 1500, ability: 'roar' },
 ] as const satisfies readonly TierDefinition[];
 
-/** The eat rule (BUILD_PROMPT.md §3, "Eating"). */
+/** The eat rule (BUILD_PROMPT.md §3, "Eating"), now a bite you aim and a carcass you eat. */
 export const EATING = {
-  /** You can eat a dinosaur if your mass is at least this multiple of theirs. */
+  /** A bite kills a dinosaur if your mass is at least this multiple of theirs. */
   minMassRatio: 1.2,
-  /** Fraction of the victim's mass that the eater gains. */
+  /** A kill leaves a carcass holding this fraction of the victim's mass as food. */
   massGainFraction: 0.7,
 } as const;
 
-/** Mass gained from each kind of food. */
+/** Biting (left click): kill something smaller, grab a carcass, or shove a rival your size. */
+export const BITING = {
+  /** Seconds between bites. */
+  cooldownSeconds: 0.4,
+  /**
+   * An aimed bite reaches further and wider than the mouth touching food, so it doesn't need
+   * pixel-perfect contact (and survives a little network lag): extra reach and a radius
+   * multiplier, in body scales.
+   */
+  extraReach: 0.25,
+  radiusMultiplier: 1.5,
+  /**
+   * Biting a dinosaur too close in size to kill shoves it away this fast (units per second),
+   * and knocks loose whatever it carries.
+   */
+  shoveSpeed: 11,
+} as const;
+
+/** Carcasses: what a kill leaves, carried in the mouth or lying on the ground. */
+export const CARCASS = {
+  /** You eat this fraction of your own mass per second while holding E... */
+  eatRatePerMass: 0.2,
+  /** ...but never slower or faster than this, in mass per second. */
+  minEatRate: 2.5,
+  maxEatRate: 60,
+  /** You can pick up a carcass holding up to this multiple of your own mass in food. */
+  carryCapacity: 1,
+  /** Top-speed multiplier while carrying a carcass, and while holding E to eat. */
+  carrySpeedFactor: 0.8,
+  eatingSpeedFactor: 0.5,
+  /** A kill's carcass rots away after lying on the ground this long. */
+  killLifetimeSeconds: 45,
+  /** A kill's carcass is this many times the victim's body radius, for biting and eating it. */
+  killRadiusScale: 1.25,
+} as const;
+
+/** Mass gained from each kind of food, before any danger-zone bonus (see DANGER_ZONES). */
 export const FOOD_MASS = {
   egg: 1,
-  /** Dropped behind sprinting players. */
+  /** Scattered by world events. */
   meat: 2,
   /** Small fleeing NPCs. */
   critter: 4,
+} as const;
+
+/**
+ * Danger zones (positions in world/layout.ts): hazardous ground where everything edible is
+ * worth more, so growing big means taking risks.
+ */
+export const DANGER_ZONES = {
+  /** Food lying in each zone is worth this many times its usual mass, and events there are this much bigger. */
+  foodMultiplier: { ashlands: 4, tarPits: 3 },
+} as const;
+
+/**
+ * Random world events: a huge carcass to fight over, or a scatter of meat. They're announced
+ * to everyone and shown on the minimap.
+ */
+export const WORLD_EVENTS = {
+  /** The first event comes this long into a round, then one every `interval` seconds. */
+  firstAfterSeconds: 20,
+  intervalSeconds: { min: 25, max: 45 },
+  /** At most this many events running at once. */
+  maxActive: 3,
+  /** Chance that an event lands in a danger zone (and is bigger for it). */
+  dangerZoneChance: 0.5,
+  /** Events grow through the round: by the meteor they're this much bigger again. */
+  lateRoundBonus: 1.5,
+  /** Events keep at least this far from each other. */
+  spacing: 25,
+  /** Which kind of event happens, by weight. */
+  weights: { carcass: 0.55, meatDrop: 0.45 },
+  carcass: {
+    /** Food in a fresh carcass before the zone and late-round bonuses. */
+    food: { min: 50, max: 90 },
+    /** Radius of a carcass holding `food.max`; bigger ones grow with the cube root of their food. */
+    radius: 2.4,
+    lifetimeSeconds: 120,
+  },
+  meatDrop: {
+    chunks: { min: 10, max: 16 },
+    /** Chunks land within this distance of the event's centre. */
+    scatterRadius: 7,
+  },
 } as const;
 
 /** Food on the island. */
@@ -60,31 +137,32 @@ export const FOOD = {
   eggRadius: 0.25,
 } as const;
 
-/** Meat chunks dropped by sprinting dinosaurs. */
+/** Meat chunks scattered by world events. */
 export const MEAT = {
   /** Meat rots away after this long. */
   lifetimeSeconds: 30,
   /** When the island holds this many chunks, the oldest one disappears. */
   maxChunks: 300,
   radius: 0.22,
-  /** Chunks land just behind the dinosaur, scattered by up to this many body scales. */
-  scatter: 0.35,
 } as const;
 
-/** Small fleeing critters: quick snacks for small dinosaurs. */
+/** Small fleeing critters: quick snacks that a hungry dinosaur can run down. */
 export const CRITTERS = {
   count: 24,
   radius: 0.25,
   wanderSpeed: 2.2,
-  /** Slower than a fresh Compsognathus, so they can be caught, but they dodge. */
-  fleeSpeed: 7.5,
+  /** Slower than a fresh Compsognathus or a young Velociraptor, so they can be caught. */
+  fleeSpeed: 6.2,
   /** Critters bolt when a dinosaur comes this close. */
-  fearRadius: 11,
+  fearRadius: 8,
   /** Radians per second. */
-  turnRate: 5,
+  turnRate: 4.5,
   /** Fleeing critters zigzag this far either side of straight away (radians), this fast. */
-  dodgeAngle: 0.6,
-  dodgeRate: 7,
+  dodgeAngle: 0.4,
+  dodgeRate: 6,
+  /** A critter can only bolt this long before it tires and slows to a trot to get its breath back. */
+  boltSeconds: 2.5,
+  restSeconds: 1.5,
   /** A wandering critter picks a new direction this often. */
   wanderSeconds: { min: 1.5, max: 4 },
   respawnSeconds: 8,
@@ -127,16 +205,24 @@ export const MOVEMENT = {
   decelerationSeconds: 0.2,
 } as const;
 
-/** Sprinting trades mass for speed and drops meat chunks that anyone can eat. */
+/** Sprinting: a burst of speed paid for with stamina (see STAMINA). */
 export const SPRINT = {
   speedMultiplier: 1.6,
-  /**
-   * Fraction of current mass lost per second while sprinting. Mass never drops below
-   * `MASS.minimum`, and a dinosaur at the minimum has nothing left to burn, so it can't sprint.
-   */
-  massLossPerSecond: 0.015,
-  /** Lost mass is dropped as meat (FOOD_MASS.meat per chunk), at most this many chunks a second. */
-  maxMeatDropsPerSecond: 4,
+} as const;
+
+/**
+ * Stamina for sprinting, from 0 to 1. Sprinting drains it; it refills once you ease off. Run it
+ * dry and you're winded: no sprinting until it's back to `minToSprint`.
+ */
+export const STAMINA = {
+  /** A full bar lasts this many seconds of sprinting. */
+  sprintSeconds: 4,
+  /** An empty bar takes this long to refill completely... */
+  refillSeconds: 5,
+  /** ...starting this long after you stop sprinting. */
+  refillDelaySeconds: 0.7,
+  /** A winded dinosaur can sprint again once its bar is back to this. */
+  minToSprint: 0.3,
 } as const;
 
 /** Body scale grows with mass ^ scaleExponent within a tier, with a visible jump on each evolution. */
@@ -197,6 +283,8 @@ export const ROUND = {
   spawnProtectionSeconds: 3,
   /** Respawns pick a spot at least this far from anything that could eat a new dinosaur, if they can. */
   safeSpawnDistance: 30,
+  /** The podium shows this many winners. */
+  podiumSize: 3,
 } as const;
 
 /** Room capacity (BUILD_PROMPT.md §3, "Rooms and bots"). */
@@ -241,6 +329,18 @@ export const BOTS = {
   /** Chance per decision that a bot gets distracted and wanders off, ignoring everything. */
   distractionChance: 0.04,
   distractionSeconds: { min: 1, max: 2.5 },
+  /**
+   * How alert bots are to threats: the flee range is scaled by this, from the clumsiest to the
+   * sharpest, so clumsy bots notice danger late.
+   */
+  alertness: { min: 0.45, max: 1.1 },
+  /** Chance per tick that a bot bites when its prey is in reach, from the clumsiest to the sharpest. */
+  biteChance: { min: 0.25, max: 0.8 },
+  /** Bots value a world-event carcass at this fraction of its food, and hear about it from this far. */
+  eventCarcassAppeal: 0.5,
+  eventHearingRange: 140,
+  /** Bots only bother sprinting while they have at least this much stamina. */
+  minSprintStamina: 0.2,
 } as const;
 
 export interface AbilityTuning {
@@ -265,6 +365,11 @@ export const NETWORK = {
   /** Clients only receive entities within this distance. */
   interestRadius: 120,
   leaderboardSize: 10,
+  /** The leaderboard is refreshed this often, in ticks. */
+  leaderboardRefreshTicks: 10,
+  /** The minimap shows this many leaders, at positions rounded to this many units. */
+  minimapLeaders: 3,
+  minimapPrecision: 4,
   /** Port the game server listens on (HTTP and WebSocket) unless PORT is set. */
   defaultServerPort: 2567,
   /** Entities leave a client's view only beyond interestRadius plus this, so nothing flickers at the edge. */
@@ -324,9 +429,10 @@ export const CAMERA = {
   zoomSharpness: 2.5,
   /** Minimum gap between the camera and the ground, in world units. */
   groundClearance: 0.5,
-  /** Camera punch strength for biting food, eating a dinosaur and evolving. */
+  /** Camera punch strength for biting food, catching a dinosaur, being shoved and evolving. */
   bitePunch: 0.35,
   killPunch: 1.4,
+  shovePunch: 1.1,
   evolvePunch: 2.5,
   /** A vent erupting within this distance of you punches the camera this hard. */
   ventPunch: 0.8,
@@ -339,6 +445,11 @@ export const EFFECTS = {
   hitstopSeconds: 0.08,
   /** Spawn-protected dinosaurs pulse with a glow this many times a second. */
   protectionBlinkHz: 4,
+  /** The ground rumbles harder as the meteor nears (camera shake in body scales)... */
+  meteorRumble: 0.06,
+  /** ...and the impact itself shakes hard, behind a white flash that fades over this long. */
+  impactShake: 1.2,
+  impactFlashSeconds: 1.2,
 } as const;
 
 /** Steering feel for mouse and touch controls. */

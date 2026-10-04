@@ -68,6 +68,26 @@ export const TAR_PITS: readonly CircleArea[] = [
   { x: 110, z: -70, radius: 6 },
 ];
 
+/**
+ * Danger zones: hazardous ground where food is worth more (multipliers in config.ts
+ * DANGER_ZONES). The Ashlands are the volcano's bare slopes, where the vents erupt; the Tar Pits
+ * zone is the scorched ground round the pits, where a dinosaur can get stuck.
+ */
+export type DangerZoneId = 'ashlands' | 'tarPits';
+
+export const DANGER_ZONE_NAMES: Readonly<Record<DangerZoneId, string>> = {
+  ashlands: 'the Ashlands',
+  tarPits: 'the Tar Pits',
+};
+
+export const ASHLANDS = {
+  /** From the crater's edge out to here on the volcano's slopes. */
+  outerRadius: 34,
+} as const;
+
+/** The Tar Pits zone reaches this far beyond each pit's edge. */
+export const TAR_FIELD_MARGIN = 13;
+
 /** Fern patches grow in the jungle to the west and north. */
 export const FERN_PATCHES: readonly CircleArea[] = [
   { x: -55, z: 35, radius: 12 },

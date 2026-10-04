@@ -1,8 +1,19 @@
-import { WORLD } from '../config.ts';
+import { DANGER_ZONES, WORLD } from '../config.ts';
 import { clamp, lerp, smoothstep, TAU } from '../math.ts';
 import { fbm } from '../noise.ts';
 import type { Random } from '../random.ts';
-import { type CircleArea, FERN_PATCHES, RIVER, TAR, TAR_PITS, TERRAIN, VOLCANO } from './layout.ts';
+import {
+  ASHLANDS,
+  type CircleArea,
+  type DangerZoneId,
+  FERN_PATCHES,
+  RIVER,
+  TAR,
+  TAR_FIELD_MARGIN,
+  TAR_PITS,
+  TERRAIN,
+  VOLCANO,
+} from './layout.ts';
 
 /** Surface height of the sea and the river. */
 export const WATER_LEVEL = 0;
@@ -127,6 +138,18 @@ export function terrainSpeedFactor(x: number, z: number): number {
   if (tarPitAt(x, z)) return WORLD.tarPitSpeedMultiplier;
   if (distanceToRiver(x, z) < RIVER.width / 2) return WORLD.riverSpeedMultiplier;
   return 1;
+}
+
+/** The danger zone at this point, if any (see DANGER_ZONES in config.ts). */
+export function dangerZoneAt(x: number, z: number): DangerZoneId | null {
+  if (Math.hypot(x, z) < ASHLANDS.outerRadius) return 'ashlands';
+  return tarPitAt(x, z, TAR_FIELD_MARGIN) ? 'tarPits' : null;
+}
+
+/** How many times its usual mass food is worth at this point: more in the danger zones. */
+export function foodMultiplierAt(x: number, z: number): number {
+  const zone = dangerZoneAt(x, z);
+  return zone === null ? 1 : DANGER_ZONES.foodMultiplier[zone];
 }
 
 /** 0 in the open plains (east and south) up to 1 in the jungle (west and north). */

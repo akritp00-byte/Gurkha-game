@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { MASS, MOVEMENT, PUSH, SPRINT, WORLD } from './config.ts';
+import { CARCASS, MOVEMENT, PUSH, SPRINT, STAMINA, WORLD } from './config.ts';
 import {
   canSprint,
+  FULL_STAMINA,
+  IDLE_INPUT,
+  type Locomotion,
+  loadFactor,
   type Motion,
   type MoveInput,
+  type PlayerInput,
   sanitizeInput,
   speedForMass,
+  type Stamina,
+  stepLocomotion,
   stepMotion,
+  stepStamina,
   turnRateForMass,
 } from './movement.ts';
 import { TAR_PITS, VOLCANO } from './world/layout.ts';
@@ -17,10 +25,29 @@ const RUN: MoveInput = { turn: 0, throttle: 1, sprint: false };
 const SPRINT_RUN: MoveInput = { turn: 0, throttle: 1, sprint: true };
 const STAND: MoveInput = { turn: 0, throttle: 0, sprint: false };
 
-function run(start: Motion, input: MoveInput, ticks: number, mass = 10, terrainFactor = 1) {
+function run(
+  start: Motion,
+  input: MoveInput,
+  ticks: number,
+  mass = 10,
+  terrainFactor = 1,
+  load = 1,
+) {
   let motion = start;
-  for (let i = 0; i < ticks; i++) motion = stepMotion(motion, input, { mass, terrainFactor }, TICK);
+  for (let i = 0; i < ticks; i++) {
+    motion = stepMotion(motion, input, { mass, terrainFactor, loadFactor: load }, TICK);
+  }
   return motion;
+}
+
+/** A dinosaur body for stepLocomotion, standing at (60, 0) facing +z with a full sprint bar. */
+function body(fields: Partial<Locomotion> = {}): Locomotion {
+  return { ...at(60, 0), ...FULL_STAMINA, sprinting: false, mass: 10, carrying: false, ...fields };
+}
+
+function hold(dino: Locomotion, input: PlayerInput, seconds: number): Locomotion {
+  for (let t = 0; t < seconds - 1e-9; t += TICK) stepLocomotion(dino, input, TICK);
+  return dino;
 }
 
 function at(x: number, z: number, heading = 0): Motion {
@@ -87,12 +114,16 @@ describe('stepMotion', () => {
   });
 
   it('treats garbage input as no input and clamps the rest', () => {
-    expect(sanitizeInput({ turn: Number.NaN, throttle: Infinity, sprint: 'yes' })).toEqual(STAND);
-    expect(sanitizeInput({ turn: '1', throttle: null })).toEqual(STAND);
-    expect(sanitizeInput({ turn: 5, throttle: -2, sprint: true })).toEqual({
+    expect(sanitizeInput({ turn: Number.NaN, throttle: Infinity, sprint: 'yes' })).toEqual(
+      IDLE_INPUT,
+    );
+    expect(sanitizeInput({ turn: '1', throttle: null, bite: 1, eat: 'yes' })).toEqual(IDLE_INPUT);
+    expect(sanitizeInput({ turn: 5, throttle: -2, sprint: true, bite: true })).toEqual({
       turn: 1,
       throttle: 0,
       sprint: true,
+      bite: true,
+      eat: false,
     });
     const cheat = run(start, { ...RUN, throttle: 1000 }, 40);
     expect(cheat.speed).toBeCloseTo(speedForMass(10));
@@ -105,17 +136,75 @@ describe('stepMotion', () => {
 });
 
 describe('sprinting', () => {
+  const SPRINTING: PlayerInput = { ...IDLE_INPUT, ...SPRINT_RUN };
+
   it('runs 1.6× faster', () => {
     const sprinting = run(at(60, 0), SPRINT_RUN, 40, 60);
     expect(sprinting.speed).toBeCloseTo(speedForMass(60) * SPRINT.speedMultiplier);
     expect(SPRINT.speedMultiplier).toBe(1.6);
   });
 
-  it('is impossible at the minimum mass, which has nothing left to burn', () => {
-    expect(canSprint(MASS.minimum)).toBe(false);
-    expect(canSprint(MASS.minimum + 0.01)).toBe(true);
-    const sprinting = run(at(60, 0), SPRINT_RUN, 40, MASS.minimum);
-    expect(sprinting.speed).toBeCloseTo(speedForMass(MASS.minimum));
+  it('spends stamina, not mass: a full bar lasts 4 s, then you are winded', () => {
+    const dino = hold(body({ mass: 60 }), SPRINTING, 2);
+    expect(dino.sprinting).toBe(true);
+    expect(dino.stamina).toBeCloseTo(1 - 2 / STAMINA.sprintSeconds);
+    expect(dino.mass).toBe(60);
+    expect(dino.speed).toBeCloseTo(speedForMass(60) * SPRINT.speedMultiplier);
+
+    hold(dino, SPRINTING, STAMINA.sprintSeconds - 2 + TICK);
+    expect(dino.stamina).toBe(0);
+    expect(dino.winded).toBe(true);
+    hold(dino, SPRINTING, 1);
+    expect(dino.sprinting).toBe(false);
+    expect(dino.speed).toBeCloseTo(speedForMass(60));
+  });
+
+  it('lets a fresh hatchling sprint (it used to need mass to burn)', () => {
+    const dino = hold(body(), SPRINTING, 1);
+    expect(dino.sprinting).toBe(true);
+    expect(dino.speed).toBeCloseTo(speedForMass(10) * SPRINT.speedMultiplier);
+  });
+
+  it('refills after a short rest, and a winded dinosaur gets its breath back at 30%', () => {
+    let stamina: Stamina = { stamina: 0, winded: true, refillIn: STAMINA.refillDelaySeconds };
+    stamina = stepStamina(stamina, false, STAMINA.refillDelaySeconds);
+    expect(stamina.stamina).toBe(0); // the pause before refilling
+    stamina = stepStamina(stamina, false, STAMINA.refillSeconds * 0.2);
+    expect(stamina.stamina).toBeCloseTo(0.2);
+    expect(canSprint(stamina)).toBe(false);
+    stamina = stepStamina(stamina, false, STAMINA.refillSeconds * 0.11);
+    expect(stamina.winded).toBe(false);
+    expect(canSprint(stamina)).toBe(true);
+    stamina = stepStamina(stamina, false, STAMINA.refillSeconds);
+    expect(stamina.stamina).toBe(1);
+  });
+
+  it('costs nothing while standing still with sprint held', () => {
+    const dino = hold(body(), { ...IDLE_INPUT, sprint: true }, 2);
+    expect(dino.sprinting).toBe(false);
+    expect(dino.stamina).toBe(1);
+  });
+});
+
+describe('carrying and eating', () => {
+  it('slows a dinosaur with a carcass in its mouth, and more while it eats', () => {
+    expect(loadFactor(false, false)).toBe(1);
+    expect(loadFactor(true, false)).toBe(CARCASS.carrySpeedFactor);
+    expect(loadFactor(true, true)).toBeCloseTo(
+      CARCASS.carrySpeedFactor * CARCASS.eatingSpeedFactor,
+    );
+    const RUNNING: PlayerInput = { ...IDLE_INPUT, ...RUN };
+    expect(hold(body({ carrying: true }), RUNNING, 2).speed).toBeCloseTo(
+      speedForMass(10) * CARCASS.carrySpeedFactor,
+    );
+    expect(hold(body(), { ...RUNNING, eat: true }, 2).speed).toBeCloseTo(
+      speedForMass(10) * CARCASS.eatingSpeedFactor,
+    );
+  });
+
+  it('steps exactly the same way every time, so prediction matches the server', () => {
+    const input: PlayerInput = { turn: 0.4, throttle: 1, sprint: true, bite: false, eat: false };
+    expect(hold(body(), input, 6)).toEqual(hold(body(), input, 6));
   });
 });
 
@@ -127,12 +216,15 @@ describe('terrain and pushes', () => {
     expect(terrainSpeedFactor(pit.x, pit.z)).toBe(0.5);
     expect(terrainSpeedFactor(60, 0)).toBe(1);
     const wading = run(at(60, 0), RUN, 40, 10, terrainSpeedFactor(pit.x, pit.z));
+    expect(hold(body({ x: pit.x, z: pit.z }), { ...IDLE_INPUT, ...RUN }, 0.5).speed).toBeCloseTo(
+      speedForMass(10) * 0.5,
+    );
     expect(wading.speed).toBeCloseTo(speedForMass(10) * 0.5);
   });
 
   it('carries a dinosaur along with a push that fades away', () => {
     let motion: Motion = { ...at(60, 0), pushX: 18 };
-    motion = stepMotion(motion, STAND, { mass: 10, terrainFactor: 1 }, TICK);
+    motion = stepMotion(motion, STAND, { mass: 10, terrainFactor: 1, loadFactor: 1 }, TICK);
     expect(motion.pushX).toBeCloseTo(18 * Math.exp(-PUSH.damping * TICK));
     expect(motion.x).toBeGreaterThan(60);
     motion = run(motion, STAND, 100);

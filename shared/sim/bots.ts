@@ -1,26 +1,29 @@
-import { BOTS, CRITTERS, FERNS, FOOD_MASS, WORLD } from '../config.ts';
-import { biteReach, massGained, outweighs } from '../eating.ts';
-import { angleDelta, clamp, dampFactor, lerp, TAU } from '../math.ts';
+import { BOTS, FERNS, FOOD_MASS, WORLD } from '../config.ts';
 import {
-  canSprint,
-  IDLE_INPUT,
-  type MoveInput,
-  speedForMass,
-  turnRateForMass,
-} from '../movement.ts';
+  attackZone,
+  biteReach,
+  bodyRadius,
+  massGained,
+  outweighs,
+  zoneTouches,
+} from '../eating.ts';
+import { angleDelta, clamp, dampFactor, lerp, TAU } from '../math.ts';
+import { IDLE_INPUT, type PlayerInput, speedForMass, turnRateForMass } from '../movement.ts';
 import { type Random, randomRange } from '../random.ts';
 import { scaleForMass, tierForMass } from '../tiers.ts';
 import { canSee } from '../visibility.ts';
 import { type CircleArea, FERN_PATCHES, TAR_PITS, VOLCANO } from '../world/layout.ts';
-import type { Dino, WorldSenses } from './entities.ts';
+import { foodMultiplierAt } from '../world/terrain.ts';
+import type { Carcass, Dino, WorldSenses } from './entities.ts';
 
 /**
  * Bots (BUILD_PROMPT.md §3, "Rooms and bots"): they wander, look for food, hunt smaller
- * dinosaurs and flee bigger ones. They only decide every 200–500 ms, misjudge food, steer with
- * a wobble, get distracted and give up long chases, so they never feel perfect.
+ * dinosaurs, bite and eat them, crowd round world-event carcasses and flee bigger dinosaurs.
+ * They only decide every 200–500 ms, misjudge food, steer with a wobble, bite at the wrong
+ * moment, get distracted and give up long chases, so they never feel perfect.
  */
 
-export type BotMode = 'wander' | 'food' | 'hunt' | 'flee' | 'hide';
+export type BotMode = 'wander' | 'food' | 'hunt' | 'flee' | 'hide' | 'feed';
 
 /** A bot's state of mind. The world keeps one per bot. */
 export interface BotBrain {
@@ -38,12 +41,16 @@ export interface BotBrain {
   sprint: boolean;
   /** The dinosaur being chased or fled from. */
   targetId: number | null;
+  /** The carcass being gone for or eaten from. */
+  carcassId: number | null;
   /** Seconds spent chasing the current target. */
   chaseSeconds: number;
   /** Seconds before the bot will hunt again after giving up a chase. */
   huntCooldown: number;
   /** Seconds of not paying attention left. */
   distractedFor: number;
+  /** Seconds to stand still and do nothing (tests freeze bots in place). */
+  holdFor: number;
   /** Steering error in radians. It drifts towards a new random target at every decision. */
   wobble: number;
   wobbleTarget: number;
@@ -81,9 +88,11 @@ export function createBotBrain(
     throttle: 0,
     sprint: false,
     targetId: null,
+    carcassId: null,
     chaseSeconds: 0,
     huntCooldown: 0,
     distractedFor: 0,
+    holdFor: 0,
     wobble: 0,
     wobbleTarget: 0,
   };
@@ -98,6 +107,7 @@ export function resetBrain(brain: BotBrain): void {
   brain.throttle = 0;
   brain.sprint = false;
   brain.targetId = null;
+  brain.carcassId = null;
   brain.chaseSeconds = 0;
   brain.huntCooldown = 0;
   brain.distractedFor = 0;
@@ -112,7 +122,11 @@ export function botInput(
   senses: WorldSenses,
   random: Random,
   dt: number,
-): MoveInput {
+): PlayerInput {
+  if (brain.holdFor > 0) {
+    brain.holdFor = Math.max(0, brain.holdFor - dt);
+    return IDLE_INPUT;
+  }
   brain.huntCooldown = Math.max(0, brain.huntCooldown - dt);
   brain.distractedFor = Math.max(0, brain.distractedFor - dt);
   if (brain.mode === 'hunt') brain.chaseSeconds += dt;
@@ -125,7 +139,8 @@ export function botInput(
       BOTS.reactionDelayMs.max / 1000,
     );
   }
-  return steer(brain, self, dt);
+  const steering = steer(brain, self, dt);
+  return { ...steering, ...act(brain, self, senses, random) };
 }
 
 function decide(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random): void {
@@ -146,10 +161,26 @@ function decide(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random
     return;
   }
   if (flee(brain, self, senses)) return;
+  if (self.carrying) {
+    // Mouth full: stop and eat it before anything else.
+    brain.mode = 'feed';
+    brain.throttle = 0;
+    brain.carcassId = self.carryingId;
+    return;
+  }
 
   const prey = findPrey(brain, self, senses);
+  const carcass = findCarcass(brain, self, senses);
   const food = findFood(brain, self, senses, random);
-  if (prey && prey.score >= food.score && chase(brain, self, prey.dino)) return;
+  const preyScore = prey?.score ?? 0;
+  const carcassScore = carcass?.score ?? 0;
+  if (prey && preyScore >= carcassScore && preyScore >= food.score) {
+    if (chase(brain, self, prey.dino)) return;
+  }
+  if (carcass && carcassScore >= food.score) {
+    goToCarcass(brain, self, carcass.carcass);
+    return;
+  }
   if (food.score > 0) {
     brain.mode = 'food';
     brain.throttle = 1;
@@ -161,7 +192,7 @@ function decide(brain: BotBrain, self: Dino, senses: WorldSenses, random: Random
 
 /** Run from every bigger dinosaur the bot can see coming. Small bots make for the ferns. */
 function flee(brain: BotBrain, self: Dino, senses: WorldSenses): boolean {
-  const alertness = lerp(0.6, 1.2, brain.skill);
+  const alertness = lerp(BOTS.alertness.min, BOTS.alertness.max, brain.skill);
   let awayX = 0;
   let awayZ = 0;
   let nearestGap = Infinity;
@@ -275,6 +306,39 @@ function chase(brain: BotBrain, self: Dino, prey: Dino): boolean {
   return true;
 }
 
+interface CarcassChoice {
+  readonly carcass: Carcass;
+  readonly score: number;
+}
+
+/**
+ * The most tempting carcass on the ground: kills the bot can see, and world-event carcasses it
+ * has heard about from much further away. A bot only counts the food it could hope to eat.
+ */
+function findCarcass(brain: BotBrain, self: Dino, senses: WorldSenses): CarcassChoice | undefined {
+  const sight = sightRange(brain, self);
+  let best: CarcassChoice | undefined;
+  for (const carcass of senses.carcasses.values()) {
+    if (carcass.carrierId !== null) continue;
+    const distance = Math.hypot(carcass.x - self.x, carcass.z - self.z);
+    const event = carcass.kind === 'event';
+    if (distance > (event ? BOTS.eventHearingRange : sight)) continue;
+    const worth = Math.min(carcass.food, 2 * self.mass) * (event ? BOTS.eventCarcassAppeal : 1);
+    const score = worth / (distance + BOTS.distanceBias);
+    if (!best || score > best.score) best = { carcass, score };
+  }
+  return best;
+}
+
+/** Head for a carcass, and start eating once the mouth reaches it. */
+function goToCarcass(brain: BotBrain, self: Dino, carcass: Carcass): void {
+  brain.carcassId = carcass.id;
+  brain.mode = 'feed';
+  const reachable = zoneTouches(attackZone(self, self.mass), carcass.x, carcass.z, carcass.radius);
+  brain.throttle = reachable ? 0 : 1;
+  setGoal(brain, carcass.x, carcass.z);
+}
+
 interface FoodChoice {
   x: number;
   z: number;
@@ -297,19 +361,23 @@ function findFood(brain: BotBrain, self: Dino, senses: WorldSenses, random: Rand
   };
 
   for (const egg of senses.eggs) {
-    if (egg.alive) consider(egg.x, egg.z, FOOD_MASS.egg);
+    if (egg.alive) consider(egg.x, egg.z, FOOD_MASS.egg * foodMultiplierAt(egg.x, egg.z));
   }
-  for (const chunk of senses.meat.values()) consider(chunk.x, chunk.z, FOOD_MASS.meat);
+  for (const chunk of senses.meat.values()) {
+    consider(chunk.x, chunk.z, FOOD_MASS.meat * foodMultiplierAt(chunk.x, chunk.z));
+  }
   const speed = speedForMass(self.mass);
   for (const critter of senses.critters) {
     if (!critter.alive) continue;
     const distance = Math.hypot(critter.x - self.x, critter.z - self.z);
     const lead = Math.min(distance / speed, 1) * brain.skill;
-    const outrun = critter.fleeing && speed < CRITTERS.fleeSpeed;
+    const outrun = critter.fleeing && critter.speed > speed;
     consider(
       critter.x + Math.sin(critter.heading) * critter.speed * lead,
       critter.z + Math.cos(critter.heading) * critter.speed * lead,
-      FOOD_MASS.critter * (outrun ? BOTS.fleeingCritterAppeal : BOTS.critterAppeal),
+      FOOD_MASS.critter *
+        foodMultiplierAt(critter.x, critter.z) *
+        (outrun ? BOTS.fleeingCritterAppeal : BOTS.critterAppeal),
     );
   }
   return best;
@@ -348,7 +416,11 @@ function reached(brain: BotBrain, self: Dino): boolean {
 }
 
 /** Turn the current goal into stick input, with skill-dependent sloppiness. */
-function steer(brain: BotBrain, self: Dino, dt: number): MoveInput {
+function steer(
+  brain: BotBrain,
+  self: Dino,
+  dt: number,
+): { turn: number; throttle: number; sprint: boolean } {
   if (Number.isNaN(brain.goalX)) return IDLE_INPUT;
   brain.wobble += (brain.wobbleTarget - brain.wobble) * dampFactor(WOBBLE_SHARPNESS, dt);
 
@@ -369,8 +441,43 @@ function steer(brain: BotBrain, self: Dino, dt: number): MoveInput {
   if (brain.mode === 'wander' || brain.mode === 'hide') {
     throttle *= clamp(distance / ARRIVAL_DISTANCE, 0.2, 1);
   }
-  const sprint = brain.sprint && misaligned < SPRINT_ALIGNMENT && canSprint(self.mass);
+  // Bots save stamina for when it counts, and wait out being winded.
+  const rested = !self.winded && (self.sprinting || self.stamina >= BOTS.minSprintStamina);
+  const sprint = brain.sprint && misaligned < SPRINT_ALIGNMENT && rested;
   return { turn, throttle, sprint };
+}
+
+/**
+ * Biting and eating, checked every tick between decisions. A bot bites prey once it's in
+ * reach, though not always at the right moment, shoves rivals off the carcass it's eating, and
+ * eats whatever it holds unless it's running for its life.
+ */
+function act(
+  brain: BotBrain,
+  self: Dino,
+  senses: WorldSenses,
+  random: Random,
+): { bite: boolean; eat: boolean } {
+  if (self.carrying) return { bite: false, eat: brain.mode !== 'flee' };
+  let eat = false;
+  if (brain.mode === 'feed' && brain.carcassId !== null) {
+    const carcass = senses.carcasses.get(brain.carcassId);
+    eat =
+      carcass?.carrierId === null &&
+      zoneTouches(attackZone(self, self.mass), carcass.x, carcass.z, carcass.radius);
+  }
+  if (self.biteCooldown > 0 || self.protectedFor > 0) return { bite: false, eat };
+  const zone = attackZone(self, self.mass);
+  let target: 'prey' | 'rival' | null = null;
+  for (const other of senses.dinos.values()) {
+    if (other.id === self.id || !other.alive || other.protectedFor > 0) continue;
+    if (!zoneTouches(zone, other.x, other.z, bodyRadius(other.mass))) continue;
+    if (outweighs(self.mass, other.mass)) target = 'prey';
+    else if (eat && !outweighs(other.mass, self.mass)) target ??= 'rival';
+  }
+  const chance = lerp(BOTS.biteChance.min, BOTS.biteChance.max, brain.skill);
+  const bite = target !== null && random() < (target === 'prey' ? chance : chance / 2);
+  return { bite, eat: eat && !bite };
 }
 
 /** Steer round tar pits and the crater, unless the goal itself is in one. */

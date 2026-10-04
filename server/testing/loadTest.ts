@@ -45,7 +45,13 @@ export async function runLoadTest(options: LoadTestOptions): Promise<LoadTestRes
       const style = steering[index];
       if (random() < 0.05) style.turn = random() * 2 - 1;
       if (random() < 0.02) style.sprint = !style.sprint;
-      client.send({ turn: style.turn, throttle: 1, sprint: style.sprint });
+      client.send({
+        turn: style.turn,
+        throttle: 1,
+        sprint: style.sprint,
+        bite: random() < 0.02,
+        eat: random() < 0.2,
+      });
     });
   }, 1000 / NETWORK.tickRate);
 

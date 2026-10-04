@@ -1,4 +1,5 @@
 import {
+  dangerZoneAt,
   distanceToRiver,
   fernPatchAt,
   hash2,
@@ -40,6 +41,9 @@ const COLORS = {
   fernFloor: new Color(0x3d8535),
   rock: new Color(0x7a665c),
   scorched: new Color(0x4a3c37),
+  /** The danger zones: ashen slopes, and burnt ground round the tar pits. */
+  ash: new Color(0x6e4038),
+  burnt: new Color(0x5a4a33),
 } as const;
 
 const scratch = new Color();
@@ -65,6 +69,9 @@ function groundColor(x: number, z: number, y: number, upness: number, out: Color
   );
   out.lerp(COLORS.rock, rockiness);
   out.lerp(COLORS.scorched, smoothstep(VOLCANO.craterRadius * 2, VOLCANO.craterRadius, r));
+  const zone = dangerZoneAt(x, z);
+  if (zone === 'ashlands') out.lerp(COLORS.ash, 0.4);
+  else if (zone === 'tarPits') out.lerp(COLORS.burnt, 0.5);
   return out;
 }
 

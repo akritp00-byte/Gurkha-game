@@ -3,6 +3,14 @@ import { GROWTH, MASS, TIERS } from './config.ts';
 export type Tier = (typeof TIERS)[number];
 
 /** The evolution tier a dinosaur of this mass belongs to. */
+/**
+ * Mass as a whole number for display. Eating adds mass a little every tick, so a total can
+ * land a hair under the true value (73.99999…); this doesn't let that show as 73.
+ */
+export function wholeMass(mass: number): number {
+  return Math.floor(mass + 1e-6);
+}
+
 export function tierForMass(mass: number): Tier {
   for (let i = TIERS.length - 1; i > 0; i--) {
     if (mass >= TIERS[i].minMass) return TIERS[i];

@@ -6,6 +6,8 @@ import {
   MASS,
   NETWORK,
   ROOM,
+  ROUND,
+  roundOfLength,
 } from '@extinct/shared';
 import { type DebugApi, Game } from './game/Game.ts';
 import { OfflineSession } from './game/OfflineSession.ts';
@@ -29,12 +31,18 @@ const ui = document.querySelector<HTMLElement>('#ui');
 if (!canvas || !ui) throw new Error('index.html is missing #game or #ui');
 
 // URL options for testing (see README.md): ?offline, ?name=, ?room=, ?seed=, ?bots=, ?mass=,
-// ?debug and ?quality=low|medium|high.
+// ?round=, ?debug and ?quality=low|medium|high.
 const params = new URLSearchParams(window.location.search);
 const number = (name: string) => (params.has(name) ? Number(params.get(name)) : Number.NaN);
 const seed = number('seed');
 const bots = number('bots');
 const mass = number('mass');
+/** A shorter round, in seconds, for trying out the meteor (offline, or on a test server). */
+const roundSeconds = number('round');
+const shortRound =
+  Number.isFinite(roundSeconds) && roundSeconds >= 5
+    ? Math.min(roundSeconds, ROUND.durationSeconds)
+    : undefined;
 const touchFirst = window.matchMedia('(pointer: coarse)').matches;
 const notice = new Notice(ui);
 
@@ -52,6 +60,7 @@ function offlineSession(): OfflineSession {
       : ROOM.minDinosaurs - 1,
     playerName: 'You',
     terrain: field,
+    round: shortRound === undefined ? undefined : roundOfLength(shortRound),
   });
 }
 
@@ -65,9 +74,10 @@ async function startSession(): Promise<Session> {
   const options: JoinOptions = {
     name: cleanName(params.get('name'), NETWORK.maxNameLength, '') || undefined,
     room: params.get('room') ?? undefined,
-    // Only a test server (`pnpm dev`) honours these two.
+    // Only a test server (`pnpm dev`) honours these.
     bots: Number.isInteger(bots) ? bots : undefined,
     seed: Number.isInteger(seed) ? seed : undefined,
+    roundSeconds: shortRound,
   };
   try {
     return new OnlineSession(await joinGame(serverUrl, options));

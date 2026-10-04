@@ -1,12 +1,16 @@
+import { wholeMass } from '@extinct/shared';
+
 /** What the death card says about how it happened. */
 export interface Death {
   /** "Chomper the Velociraptor", or undefined if whoever it was has gone. */
   readonly eater: string | undefined;
   readonly massReached: number;
   readonly speciesReached: string;
+  /** Your place on the leaderboard when you were caught (0 if unknown). */
+  readonly rank: number;
 }
 
-/** Centre card shown while you wait to respawn: who ate you and how big you got. */
+/** Centre card shown while you wait to respawn: who caught you, your place and how big you got. */
 export class DeathScreen {
   private readonly root: HTMLElement;
   private readonly title: HTMLElement;
@@ -33,8 +37,9 @@ export class DeathScreen {
   }
 
   show(death: Death): void {
-    this.title.textContent = death.eater ? `${death.eater} ate you!` : 'You were eaten!';
-    this.detail.textContent = `You reached mass ${Math.floor(death.massReached)} as a ${death.speciesReached}.`;
+    this.title.textContent = death.eater ? `${death.eater} caught you!` : 'You were caught!';
+    const place = death.rank > 0 ? `You were #${death.rank}, ` : 'You ';
+    this.detail.textContent = `${place}${death.rank > 0 ? 'with' : 'reached'} mass ${wholeMass(death.massReached)} as a ${death.speciesReached}.`;
     this.shownSeconds = -1;
     this.root.hidden = false;
   }

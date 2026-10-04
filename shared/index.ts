@@ -8,6 +8,7 @@ export * from './random.ts';
 export * from './sim/bots.ts';
 export * from './sim/entities.ts';
 export * from './sim/names.ts';
+export * from './sim/round.ts';
 export * from './sim/vents.ts';
 export * from './sim/world.ts';
 export * from './tiers.ts';

@@ -1,7 +1,16 @@
 import { CloseCode } from '@colyseus/sdk';
-import { FERN_PATCHES, MASS, NETWORK, ROOM, scaleForMass } from '@extinct/shared';
+import {
+  attackZone,
+  FERN_PATCHES,
+  IDLE_INPUT,
+  MASS,
+  NETWORK,
+  type PlayerInput,
+  ROOM,
+} from '@extinct/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sleep, startServer, TestClient, type TestServer, waitFor } from '../testing/harness.ts';
+import type { StandingState } from './schema.ts';
 
 /** Rooms of this process, as the /stats route reports them. */
 async function roomStats(server: TestServer, roomId: string) {
@@ -69,7 +78,7 @@ describe('game room', () => {
     await waitFor(() => runner.me?.z === -40, 2000, 'teleport');
 
     for (let tick = 0; tick < 30; tick++) {
-      runner.send({ turn: 0, throttle: 1, sprint: false });
+      runner.send({ ...IDLE_INPUT, throttle: 1 });
       await sleep(1000 / NETWORK.tickRate);
     }
     runner.send(); // and stop
@@ -121,35 +130,126 @@ describe('game room', () => {
     expect(seeker.visibleNames()).toContain('Hider');
   });
 
-  it('lets a bigger player eat a smaller one, who hatches again with spawn protection', async () => {
+  /** Keep sending one input a tick until `done` (or the time runs out). */
+  async function hold(client: TestClient, input: PlayerInput, done: () => boolean, ms = 3000) {
+    const deadline = performance.now() + ms;
+    while (!done() && performance.now() < deadline) {
+      client.send(input);
+      await sleep(1000 / NETWORK.tickRate);
+    }
+    client.send();
+  }
+
+  it('lets a bigger player bite a smaller one, carry its carcass and eat it', async () => {
     const alice = await player({ room: 'eat', bots: 0, name: 'Alice' });
     const bob = await player({ room: 'eat', bots: 0, name: 'Bob' });
     alice.command({ cmd: 'setMass', mass: 40 });
     alice.command({ cmd: 'teleport', x: 60, z: 0, heading: 0 });
-    // Just inside Alice's bite zone, near her snout.
-    bob.command({ cmd: 'teleport', x: 60, z: 0.55 * scaleForMass(40) + 0.3 });
+    // In reach of Alice's bite.
+    const bite = attackZone({ x: 60, z: 0, heading: 0 }, 40);
+    bob.command({ cmd: 'teleport', x: bite.x, z: bite.z + 0.3 });
     bob.command({ cmd: 'endProtection' });
     alice.command({ cmd: 'endProtection' });
+    await waitFor(() => alice.me?.mass === 40 && bob.me?.z === Math.fround(bite.z + 0.3), 2000);
 
-    await waitFor(() => bob.me?.alive === false, 3000, 'Bob eaten');
-    await waitFor(() => bob.events.some((event) => event.type === 'dinoEaten'), 2000, 'event');
+    // Touching isn't enough any more: nothing happens until Alice bites.
+    await sleep(300);
+    expect(bob.me?.alive).toBe(true);
+    await hold(alice, { ...IDLE_INPUT, bite: true }, () => bob.me?.alive === false);
+    expect(bob.me?.alive).toBe(false);
+    await waitFor(() => bob.events.some((event) => event.type === 'dinoKilled'), 2000, 'event');
     expect(bob.events).toContainEqual(
-      expect.objectContaining({ type: 'dinoEaten', eaterName: 'Alice', victimName: 'Bob' }),
+      expect.objectContaining({
+        type: 'dinoKilled',
+        killerName: 'Alice',
+        victimName: 'Bob',
+        victimRank: 2,
+      }),
     );
-    expect(alice.events).toContainEqual(expect.objectContaining({ type: 'dinoEaten' }));
-    await waitFor(() => (alice.me?.mass ?? 0) > 46.9, 2000, 'Alice growing');
+    await waitFor(() => alice.me?.carrying === true, 2000, 'Alice carrying');
+    const [carcass] = alice.carcasses();
+    expect(carcass.carrier).toBe(alice.myId);
+    expect(carcass.food).toBeCloseTo(7, 1);
+
+    // Holding E eats it, all of it.
+    await hold(alice, { ...IDLE_INPUT, eat: true }, () => alice.carcasses().length === 0);
+    expect(alice.me?.mass).toBeCloseTo(47, 1);
+    await waitFor(() => alice.carcasses().length === 0, 2000, 'carcass eaten');
+    expect(alice.me?.carrying).toBe(false);
 
     await waitFor(() => bob.me?.alive === true, 6000, 'Bob hatching again');
     expect(bob.me?.mass).toBe(MASS.start);
     expect(bob.me?.protectedFor).toBeGreaterThan(0);
   });
 
+  it('never shows a carcass in the mouth of a dinosaur hidden in ferns', async () => {
+    const patch = FERN_PATCHES[1];
+    const hider = await player({ room: 'hidden-meal', bots: 0, name: 'Hider' });
+    const prey = await player({ room: 'hidden-meal', bots: 0, name: 'Prey' });
+    const seeker = await player({ room: 'hidden-meal', bots: 0, name: 'Seeker' });
+    hider.command({ cmd: 'setMass', mass: 30 });
+    hider.command({ cmd: 'teleport', x: patch.x, z: patch.z, heading: 0 });
+    const bite = attackZone({ x: patch.x, z: patch.z, heading: 0 }, 30);
+    prey.command({ cmd: 'teleport', x: bite.x, z: bite.z });
+    seeker.command({ cmd: 'teleport', x: patch.x + 25, z: patch.z });
+    for (const client of [hider, prey]) client.command({ cmd: 'endProtection' });
+    await waitFor(() => prey.me?.x === Math.fround(bite.x), 2000, 'everyone in place');
+
+    await hold(hider, { ...IDLE_INPUT, bite: true }, () => prey.me?.alive === false);
+    await waitFor(() => hider.me?.carrying === true, 2000, 'a meal in the ferns');
+    await sleep(300);
+    expect(seeker.visibleNames()).not.toContain('Hider');
+    expect(seeker.carcasses()).toEqual([]);
+    expect(hider.carcasses()).toHaveLength(1);
+  });
+
+  it('starts world events on a test command and announces them to everyone', async () => {
+    const near = await player({ room: 'events', bots: 0, name: 'Near' });
+    const far = await player({ room: 'events', bots: 0, name: 'Far' });
+    near.command({ cmd: 'teleport', x: -60, z: 40, heading: 0 });
+    far.command({ cmd: 'teleport', x: 70, z: -10 });
+    await waitFor(() => near.me?.x === -60, 2000, 'teleport');
+    near.command({ cmd: 'startEvent', kind: 'carcass', ahead: 12 });
+
+    await waitFor(() => far.events.some((event) => event.type === 'happening'), 2000, 'news');
+    expect(far.events).toContainEqual(
+      expect.objectContaining({ type: 'happening', kind: 'carcass', zone: null }),
+    );
+    expect(far.room.state.happenings.size).toBe(1);
+    await waitFor(() => near.carcasses().length === 1, 2000, 'the carcass in view');
+    expect(near.carcasses()[0]).toMatchObject({ carrier: 0, kind: 1 });
+    expect(far.carcasses()).toEqual([]); // too far away to be sent
+  });
+
+  it('plays a whole round: meteor, podium with the biggest first, then a fresh round', async () => {
+    const big = await player({ room: 'round', bots: 2, roundSeconds: 6, name: 'Big' });
+    expect(big.room.state.round.durationSeconds).toBe(6);
+    expect(big.room.state.round.meteorWarningAtSeconds).toBeCloseTo(4.8, 5);
+    big.command({ cmd: 'setMass', mass: 900 });
+    const leader = () => big.room.state.leaderboard.at(0) as StandingState | undefined;
+    await waitFor(() => leader()?.name === 'Big', 2000, 'leaderboard');
+    expect(big.room.state.leaderboard).toHaveLength(3);
+    expect(big.me?.rank).toBe(1);
+
+    await waitFor(() => big.events.some((e) => e.type === 'meteorWarning'), 7000, 'warning');
+    await waitFor(() => big.room.state.round.podium.length > 0, 4000, 'impact');
+    expect(big.events).toContainEqual({ type: 'meteorImpact' });
+    expect(big.room.state.round.podium[0]).toMatchObject({ name: 'Big', mass: 900, bot: false });
+    expect(big.room.state.round.podium).toHaveLength(3);
+
+    await waitFor(() => big.room.state.round.number === 2, 15_000, 'the next round');
+    expect(big.events).toContainEqual({ type: 'roundStarted', round: 2 });
+    expect(big.room.state.round.podium).toHaveLength(0);
+    expect(big.room.state.round.startTick).toBeGreaterThan(0);
+    expect(big.me?.mass).toBe(MASS.start);
+  }, 30_000);
+
   it('stops a dinosaur whose player stops sending inputs', async () => {
     const runner = await player({ room: 'silent', bots: 0 });
     runner.command({ cmd: 'teleport', x: 60, z: -40, heading: 0 });
     await waitFor(() => runner.me?.z === -40, 2000, 'teleport');
     for (let tick = 0; tick < 10; tick++) {
-      runner.send({ turn: 0, throttle: 1, sprint: false });
+      runner.send({ ...IDLE_INPUT, throttle: 1 });
       await sleep(1000 / NETWORK.tickRate);
     }
     // Then nothing, as from a hidden tab: the server covers a moment, then the dinosaur stops.

@@ -1,9 +1,13 @@
-import { clamp, CONTROLS, type MoveInput } from '@extinct/shared';
+import { clamp, CONTROLS, type PlayerInput } from '@extinct/shared';
 import { joystickInput, keyboardInput, mouseInput } from './steering.ts';
 
 export type ControlScheme = 'keyboard' | 'mouse' | 'touch';
 
-type Action = 'forward' | 'back' | 'left' | 'right' | 'sprint';
+type Action = 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'eat';
+
+/** Mouse buttons (PointerEvent.button). */
+const LEFT_BUTTON = 0;
+const RIGHT_BUTTON = 2;
 
 /** Physical key positions, so WASD works on any keyboard layout. */
 const KEY_BINDINGS: Readonly<Partial<Record<string, Action>>> = {
@@ -17,7 +21,11 @@ const KEY_BINDINGS: Readonly<Partial<Record<string, Action>>> = {
   ArrowRight: 'right',
   ShiftLeft: 'sprint',
   ShiftRight: 'sprint',
+  KeyE: 'eat',
 };
+
+/** Keys that bite (as well as the left mouse button). */
+const BITE_KEYS = new Set(['Space']);
 
 interface Pointer {
   readonly id: number;
@@ -31,11 +39,11 @@ interface Stick extends Pointer {
 }
 
 /**
- * Turns keyboard, mouse and touch into one steering input (BUILD_PROMPT.md §8):
- * - keyboard: WASD or arrow keys, Shift to sprint;
- * - mouse: hold the left button and the dinosaur runs towards the cursor (Shift sprints);
- * - touch: a floating joystick anywhere on the left half of the screen, and a sprint button
- *   on the right.
+ * Turns keyboard, mouse and touch into one input (BUILD_PROMPT.md §8):
+ * - keyboard: WASD or arrow keys, Shift to sprint, Space to bite, hold E to eat;
+ * - mouse: click to bite; hold the right button and the dinosaur runs towards the cursor;
+ * - touch: a floating joystick anywhere on the left half of the screen, and Sprint, Bite and
+ *   Eat buttons on the right.
  */
 export class Controls {
   scheme: ControlScheme;
@@ -48,14 +56,20 @@ export class Controls {
     left: false,
     right: false,
     sprint: false,
+    eat: false,
   };
   private mouse: Pointer | null = null;
   private stick: Stick | null = null;
-  /** The touch currently holding the sprint button, if any. */
+  /** The touches currently holding the sprint and eat buttons, if any. */
   private sprintTouch: number | null = null;
+  private eatTouch: number | null = null;
+  /** A click or tap since the last sample: one bite. */
+  private biteQueued = false;
   private readonly joystickBase: HTMLElement;
   private readonly joystickKnob: HTMLElement;
   private readonly sprintButton: HTMLButtonElement;
+  private readonly biteButton: HTMLButtonElement;
+  private readonly eatButton: HTMLButtonElement;
 
   constructor(surface: HTMLElement, overlay: HTMLElement, touchFirst: boolean) {
     this.surface = surface;
@@ -67,13 +81,20 @@ export class Controls {
     this.joystickKnob = document.createElement('div');
     this.joystickKnob.className = 'joystick-knob';
     this.joystickBase.append(this.joystickKnob);
-    this.sprintButton = document.createElement('button');
-    this.sprintButton.type = 'button';
-    this.sprintButton.className = 'sprint-button';
-    this.sprintButton.textContent = 'Sprint';
-    this.sprintButton.dataset.testid = 'sprint-button';
-    this.sprintButton.hidden = !touchFirst;
-    overlay.append(this.joystickBase, this.sprintButton);
+    const button = (name: string, label: string) => {
+      const element = document.createElement('button');
+      element.type = 'button';
+      element.className = `touch-button ${name}-button`;
+      element.textContent = label;
+      element.dataset.testid = `${name}-button`;
+      element.hidden = !touchFirst;
+      element.addEventListener('contextmenu', this.preventDefault);
+      return element;
+    };
+    this.sprintButton = button('sprint', 'Sprint');
+    this.biteButton = button('bite', 'Bite');
+    this.eatButton = button('eat', 'Eat');
+    overlay.append(this.joystickBase, this.sprintButton, this.biteButton, this.eatButton);
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
@@ -86,18 +107,37 @@ export class Controls {
     this.sprintButton.addEventListener('pointerdown', this.onSprintDown);
     this.sprintButton.addEventListener('pointerup', this.onSprintUp);
     this.sprintButton.addEventListener('pointercancel', this.onSprintUp);
-    this.sprintButton.addEventListener('contextmenu', this.preventDefault);
+    this.biteButton.addEventListener('pointerdown', this.onBiteDown);
+    this.eatButton.addEventListener('pointerdown', this.onEatDown);
+    this.eatButton.addEventListener('pointerup', this.onEatUp);
+    this.eatButton.addEventListener('pointercancel', this.onEatUp);
   }
 
-  /** Current steering. `dinoOnScreen` is the dinosaur's position in CSS pixels (for the mouse). */
-  sample(dinoOnScreen: { readonly x: number; readonly y: number }): MoveInput {
+  /**
+   * This frame's input. `dinoOnScreen` is the dinosaur's position in CSS pixels (for the
+   * mouse). A bite is reported once per click.
+   */
+  sample(dinoOnScreen: { readonly x: number; readonly y: number }): PlayerInput {
     const steering = this.stick
       ? joystickInput(this.stick.x - this.stick.originX, this.stick.y - this.stick.originY)
       : this.mouse
         ? mouseInput(this.mouse.x - dinoOnScreen.x, this.mouse.y - dinoOnScreen.y)
         : keyboardInput(this.keys);
-    const sprint = this.keys.sprint || this.sprintTouch !== null;
-    return steering.sprint === sprint ? steering : { ...steering, sprint };
+    const bite = this.biteQueued;
+    this.biteQueued = false;
+    return {
+      turn: steering.turn,
+      throttle: steering.throttle,
+      sprint: this.keys.sprint || this.sprintTouch !== null,
+      bite,
+      eat: this.keys.eat || this.eatTouch !== null,
+    };
+  }
+
+  /** Bite on the next sample, as if clicked. */
+  queueBite(): void {
+    this.biteQueued = true;
+    this.used = true;
   }
 
   dispose(): void {
@@ -111,16 +151,24 @@ export class Controls {
     this.surface.removeEventListener('contextmenu', this.preventDefault);
     this.joystickBase.remove();
     this.sprintButton.remove();
+    this.biteButton.remove();
+    this.eatButton.remove();
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (BITE_KEYS.has(event.code)) {
+      event.preventDefault();
+      if (!event.repeat) this.queueBite();
+      return;
+    }
     const action = KEY_BINDINGS[event.code];
-    if (action === undefined || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (action === undefined) return;
     event.preventDefault();
     this.keys[action] = true;
-    if (action === 'sprint') return; // Shift alone doesn't switch away from mouse steering
-    this.scheme = 'keyboard';
     this.used = true;
+    // Shift and E alone don't switch away from mouse steering.
+    if (action !== 'sprint' && action !== 'eat') this.scheme = 'keyboard';
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -142,9 +190,33 @@ export class Controls {
     this.sprintButton.classList.remove('active');
   };
 
+  private readonly onBiteDown = (event: PointerEvent): void => {
+    this.queueBite();
+    event.preventDefault();
+  };
+
+  private readonly onEatDown = (event: PointerEvent): void => {
+    this.eatTouch = event.pointerId;
+    this.eatButton.classList.add('active');
+    this.eatButton.setPointerCapture(event.pointerId);
+    this.used = true;
+    event.preventDefault();
+  };
+
+  private readonly onEatUp = (event: PointerEvent): void => {
+    if (event.pointerId !== this.eatTouch) return;
+    this.eatTouch = null;
+    this.eatButton.classList.remove('active');
+  };
+
   private readonly onPointerDown = (event: PointerEvent): void => {
     if (event.pointerType === 'mouse') {
-      if (event.button !== 0) return;
+      if (event.button === LEFT_BUTTON) {
+        this.queueBite();
+        event.preventDefault();
+        return;
+      }
+      if (event.button !== RIGHT_BUTTON) return;
       this.mouse = { id: event.pointerId, x: event.clientX, y: event.clientY };
       this.scheme = 'mouse';
     } else {
@@ -160,6 +232,8 @@ export class Controls {
       };
       this.scheme = 'touch';
       this.sprintButton.hidden = false;
+      this.biteButton.hidden = false;
+      this.eatButton.hidden = false;
       this.joystickBase.style.left = `${event.clientX}px`;
       this.joystickBase.style.top = `${event.clientY}px`;
       this.joystickBase.hidden = false;
@@ -191,12 +265,14 @@ export class Controls {
 
   private readonly releaseAll = (): void => {
     this.keys.forward = this.keys.back = this.keys.left = this.keys.right = false;
-    this.keys.sprint = false;
+    this.keys.sprint = this.keys.eat = false;
     this.mouse = null;
     this.stick = null;
     this.sprintTouch = null;
+    this.eatTouch = null;
     this.joystickBase.hidden = true;
     this.sprintButton.classList.remove('active');
+    this.eatButton.classList.remove('active');
   };
 
   private readonly preventDefault = (event: Event): void => {

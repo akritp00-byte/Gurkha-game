@@ -13,12 +13,37 @@ export interface GameState {
   protectedFor: number;
   respawnIn: number;
   sprinting: boolean;
+  stamina: number;
+  winded: boolean;
+  carrying: boolean;
+  carriedFood: number;
+  eating: boolean;
+  rank: number;
   hidden: boolean;
   eatenBy: string | null;
   eggsAlive: number;
   meat: number;
+  carcasses: number;
   dinosAlive: number;
   controls: string;
+  round: { number: number; phase: 'playing' | 'impact' | 'podium'; clock: number };
+}
+
+/** A place on the leaderboard or podium. */
+export interface Standing {
+  dinoId: number;
+  name: string;
+  mass: number;
+  isBot: boolean;
+}
+
+export interface CarcassInfo {
+  id: number;
+  x: number;
+  z: number;
+  food: number;
+  kind: 'kill' | 'event';
+  carrierId: number | null;
 }
 
 export interface OtherDino {
@@ -42,9 +67,14 @@ interface DebugWindow {
       distance: number,
       facing: 'toward' | 'away',
       side?: number,
+      still?: boolean,
     ): number;
     teleport(x: number, z: number, heading?: number): void;
     endProtection(): void;
+    startEvent(kind: 'carcass' | 'meatDrop', ahead?: number): void;
+    leaderboard(): Standing[];
+    podium(): Standing[];
+    carcasses(): CarcassInfo[];
   };
 }
 
@@ -63,7 +93,7 @@ export async function openGame(page: Page, query = '&bots=0'): Promise<void> {
  */
 export async function openOnlineGame(
   page: Page,
-  options: { room: string; name: string; bots?: number },
+  options: { room: string; name: string; bots?: number; round?: number },
 ): Promise<void> {
   const query = new URLSearchParams({
     room: options.room,
@@ -71,6 +101,7 @@ export async function openOnlineGame(
     bots: String(options.bots ?? 0),
     seed: '42',
   });
+  if (options.round !== undefined) query.set('round', String(options.round));
   await page.goto(`/?${query.toString()}`);
   await expect(page.locator('#game')).toHaveAttribute('data-ready', 'true', { timeout: 30_000 });
   expect((await gameState(page)).mode).toBe('online');
@@ -124,18 +155,51 @@ export function threatsAfterPlacing(
   }, bots);
 }
 
-/** Put a bot of `mass` this far ahead of the player, facing `toward` it or `away`. */
+/**
+ * Put a bot of `mass` this far ahead of the player, facing `toward` it or `away`. A `still` bot
+ * stands there doing nothing, so a slow test page can't miss it.
+ */
 export function placeDinoAhead(
   page: Page,
   mass: number,
   distance: number,
   facing: 'toward' | 'away',
   side = 0,
+  still = false,
 ): Promise<number> {
   return page.evaluate(
-    ([m, d, f, s]) => (window as unknown as DebugWindow).__extinct.placeDinoAhead(m, d, f, s),
-    [mass, distance, facing, side] as const,
+    ([m, d, f, s, st]) =>
+      (window as unknown as DebugWindow).__extinct.placeDinoAhead(m, d, f, s, st),
+    [mass, distance, facing, side, still] as const,
   );
+}
+
+/** Start a world event `ahead` units in front of the player. */
+export function startEvent(page: Page, kind: 'carcass' | 'meatDrop', ahead: number): Promise<void> {
+  return page.evaluate(
+    ([k, a]) => {
+      (window as unknown as DebugWindow).__extinct.startEvent(k, a);
+    },
+    [kind, ahead] as const,
+  );
+}
+
+export function podium(page: Page): Promise<Standing[]> {
+  return page.evaluate(() => (window as unknown as DebugWindow).__extinct.podium());
+}
+
+export function leaderboard(page: Page): Promise<Standing[]> {
+  return page.evaluate(() => (window as unknown as DebugWindow).__extinct.leaderboard());
+}
+
+export function carcasses(page: Page): Promise<CarcassInfo[]> {
+  return page.evaluate(() => (window as unknown as DebugWindow).__extinct.carcasses());
+}
+
+/** Click the middle of the game view: a bite. */
+export async function clickToBite(page: Page): Promise<void> {
+  const { width, height } = page.viewportSize() ?? { width: 1280, height: 720 };
+  await page.mouse.click(width / 2, height / 2);
 }
 
 export function teleport(page: Page, x: number, z: number, heading?: number): Promise<void> {
@@ -186,6 +250,7 @@ export interface Capture {
 export interface CaptureCondition {
   alive?: boolean;
   minMass?: number;
+  carrying?: boolean;
 }
 
 /**
@@ -213,12 +278,13 @@ export function captureFrames(
         });
       const deadline = performance.now() + timeout;
       const captures: Capture[] = [];
-      for (const { alive, minMass } of wanted) {
+      for (const { alive, minMass, carrying } of wanted) {
         for (;;) {
           const state = api.state();
           const matches =
             (alive === undefined || state.alive === alive) &&
-            (minMass === undefined || state.mass >= minMass);
+            (minMass === undefined || state.mass >= minMass) &&
+            (carrying === undefined || state.carrying === carrying);
           if (matches) {
             captures.push({
               state,
@@ -229,7 +295,7 @@ export function captureFrames(
             break;
           }
           if (performance.now() > deadline) {
-            throw new Error(`no frame matched ${JSON.stringify({ alive, minMass })}`);
+            throw new Error(`no frame matched ${JSON.stringify({ alive, minMass, carrying })}`);
           }
           await nextFrame();
         }

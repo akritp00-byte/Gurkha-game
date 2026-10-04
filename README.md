@@ -12,8 +12,8 @@ The brief, game rules and milestone plan are in [BUILD_PROMPT.md](BUILD_PROMPT.m
 | M1 Single-player sandbox      | Done    |
 | M2 Core rules offline         | Done    |
 | M3 Multiplayer                | Done    |
-| M4 Round loop                 | Next    |
-| M5 Art pass                   | Planned |
+| M4 Round loop                 | Done    |
+| M5 Art pass                   | Next    |
 | M6 Abilities, audio and juice | Planned |
 | M7 Interface polish           | Planned |
 | M8 Deployment                 | Planned |
@@ -30,19 +30,22 @@ pnpm dev               # client and game server together
 
 Open http://localhost:5173 and you join a game on the local server as a tiny Compsognathus. Bots keep every room at 16 dinosaurs and make way as players join. Open a second tab, or a phone on the same Wi-Fi (see below), to play against yourself. If the server can't be reached, the game tells you and you play offline against bots instead.
 
-- Eat eggs (+1), meat (+2) and critters (+4), and any dinosaur with a green ring (+70% of its mass).
-- Run from red rings: they can eat you.
-- Small dinosaurs can hide in ferns.
-- At 40 mass you evolve into a Velociraptor.
-- If you're eaten, you hatch again 3 seconds later.
+- Eat eggs (+1), meat (+2) and critters (+4) just by running into them.
+- Bite (left click) any dinosaur with a green ring: its carcass ends up in your mouth, worth 70% of its mass. Hold E to eat it. Bite a dinosaur your own size and you shove it, knocking its food loose.
+- Run from red rings: they can bite you.
+- Watch for world events: huge carcasses and meat drops, announced at the top of the screen and marked on the minimap. Everyone goes for them.
+- Danger zones (the volcano's slopes and the ground round the tar pits, red on the minimap) make all food worth 3–4× more, with bigger events, and the eggs there are golden.
+- Small dinosaurs can hide in ferns. At 40 mass you evolve into a Velociraptor.
+- If you're caught, you hatch again 3 seconds later.
+- Each round lasts 5 minutes. At 4:00 the meteor appears, and whoever is biggest when it hits wins. Then everyone starts again.
 
-| Device  | Controls                                                                                                     |
-| ------- | ------------------------------------------------------------------------------------------------------------ |
-| Desktop | W or ↑ to run, A/D or ←/→ to turn, S or ↓ to stop, Shift to sprint; or hold the left mouse button to steer   |
-| Phone   | Drag anywhere on the left half of the screen (a joystick appears under your thumb); hold Sprint on the right |
-| Any     | F3 opens the debug overlay: FPS, draw calls, ping and entity counts                                          |
+| Device  | Controls                                                                                                                                                  |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop | W or ↑ to run, A/D or ←/→ to turn, S or ↓ to stop, Shift to sprint; or hold the right mouse button to steer. Left click (or Space) to bite, hold E to eat |
+| Phone   | Drag anywhere on the left half of the screen (a joystick appears under your thumb); Sprint, Bite and Eat buttons on the right                             |
+| Any     | F3 opens the debug overlay: FPS, draw calls, ping and entity counts                                                                                       |
 
-Sprinting is 1.6× faster but burns mass, which falls behind you as meat.
+Sprinting is 1.6× faster and runs on stamina (the yellow bar): about 4 seconds of it, refilling once you ease off.
 
 URL options for trying things out:
 
@@ -52,10 +55,11 @@ URL options for trying things out:
 - `?seed=42` gives a fixed island layout and spawn point.
 - `?bots=0` empties the island (up to 29).
 - `?mass=1600` starts you as a T-Rex (offline only).
+- `?round=30` plays 30-second rounds, to see the meteor and podium quickly.
 - `?debug` opens the overlay.
 - `?quality=low|medium|high` overrides the graphics preset.
 
-Online, `?seed=` and `?bots=` only work against the test server that `pnpm dev` runs (they're ignored by `pnpm start`), and only for the player who creates the room.
+Online, `?seed=`, `?bots=` and `?round=` only work against the test server that `pnpm dev` runs (they're ignored by `pnpm start`), and only for the player who creates the room.
 
 While `pnpm dev` runs, http://localhost:5173/dev/dinos.html shows every tier's placeholder dinosaur side by side.
 
@@ -94,10 +98,11 @@ client/          Three.js + Vite browser client
   game/          the game loop, drawing a session: offline (the shared simulation
                  in the browser) or online
   input/         keyboard, mouse and touch steering, and sprint
-  render/        terrain, sky, plants, eggs, meat, critters, vents, threat rings,
-                 dinosaurs (dino/) and the camera
+  render/        terrain, sky, plants, eggs, meat, critters, carcasses, vents, threat
+                 rings, event beacons, the meteor, dinosaurs (dino/) and the camera
   net/           the online session: joining, prediction and interpolation
-  ui/            HUD, kill feed, death card, name tags, debug overlay, hints and styles
+  ui/            HUD, round clock, leaderboard, minimap, podium, banners, kill feed,
+                 death card, name tags, debug overlay, hints and styles
   dev/           developer pages (not shipped)
 server/          Colyseus game server: authoritative simulation
   rooms/         the game room: inputs, ticks, bots, interest filtering, events
@@ -105,12 +110,12 @@ server/          Colyseus game server: authoritative simulation
 shared/          rules and constants used by both sides
   config.ts      every tuning number
   net.ts         the network protocol: room name, inputs, events, synced shapes
-  movement.ts    the movement step function, with sprint and pushes
-  eating.ts      the eat rule, bite zones and threat colours
+  movement.ts    the movement step, with stamina sprinting, carrying and pushes
+  eating.ts      the eat rule, bites, carcass eating and threat colours
   visibility.ts  fern hiding
   tiers.ts       tiers and body scale
-  sim/           the game simulation: world, bots, vents and entity types
-  world/         the island: layout, terrain heights and terrain effects
+  sim/           the game simulation: world, bots, rounds, vents and entity types
+  world/         the island: layout, danger zones, terrain heights and effects
 e2e/             Playwright browser tests
 ```
 

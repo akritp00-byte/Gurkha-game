@@ -21,6 +21,9 @@ const PUNCH_STIFFNESS = 140;
 const PUNCH_DAMPING = 16;
 /** The spring is integrated in steps this small so it stays stable at any frame rate. */
 const SPRING_STEP_SECONDS = 1 / 120;
+/** How fast a shake wobbles, and how quickly a kick settles. */
+const SHAKE_RATE = 22;
+const SHAKE_SETTLE = 2.5;
 
 /**
  * Third-person camera on a spring arm (BUILD_PROMPT.md §6): it swings in behind the dinosaur,
@@ -36,6 +39,10 @@ export class CameraRig {
   private arm = 1;
   private punchOffset = 0;
   private punchVelocity = 0;
+  /** Camera shake: a fading kick, plus a steady rumble set every frame (the meteor). */
+  private shakeAmount = 0;
+  private rumbleAmount = 0;
+  private shakeTime = 0;
   private initialized = false;
   private readonly pivot = new Vector3();
   private readonly wanted = new Vector3();
@@ -64,6 +71,16 @@ export class CameraRig {
   /** Kick the camera back along its arm; a spring brings it home. */
   punch(strength: number): void {
     this.punchVelocity += strength * 6;
+  }
+
+  /** Shake the camera hard for a moment (in world units at body scale 1); it settles by itself. */
+  shake(strength: number): void {
+    this.shakeAmount = Math.max(this.shakeAmount, strength);
+  }
+
+  /** A steady rumble that lasts as long as it's set each frame. */
+  rumble(strength: number): void {
+    this.rumbleAmount = strength;
   }
 
   update(dt: number, subject: CameraSubject): void {
@@ -104,6 +121,15 @@ export class CameraRig {
     this.arm = clear < this.arm ? clear : this.arm + (clear - this.arm) * dampFactor(3, dt);
     const camera = this.camera;
     camera.position.lerpVectors(this.pivot, this.wanted, this.arm);
+    this.shakeTime += dt;
+    this.shakeAmount *= 1 - dampFactor(SHAKE_SETTLE, dt);
+    const shake = (this.shakeAmount + this.rumbleAmount) * zoom;
+    if (shake > 1e-3) {
+      const t = this.shakeTime * SHAKE_RATE;
+      camera.position.x += shake * (Math.sin(t * 1.3) + Math.sin(t * 2.9)) * 0.5;
+      camera.position.y += shake * (Math.sin(t * 1.7 + 1) + Math.sin(t * 3.7)) * 0.35;
+      camera.position.z += shake * (Math.sin(t * 2.1 + 2) + Math.sin(t * 3.1)) * 0.5;
+    }
     camera.position.y = Math.max(
       camera.position.y,
       heightAt(this.field, camera.position.x, camera.position.z) + CAMERA.groundClearance,

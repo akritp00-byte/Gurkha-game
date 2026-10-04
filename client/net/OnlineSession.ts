@@ -1,34 +1,44 @@
-import type { MapSchema, Schema } from '@colyseus/schema';
+import type { ArraySchema, MapSchema, Schema } from '@colyseus/schema';
 import { type InputHandle, Predict, type Reconciler } from '@colyseus/sdk';
 import {
+  CARCASS_KIND_CODES,
   CRITTERS,
   type EggSlot,
   FOOD,
   fromWireInput,
-  isSprinting,
+  HAPPENING_KIND_CODES,
   MESSAGE,
-  type MoveInput,
+  type NetCarcass,
   type NetCritter,
   type NetDino,
   type NetEgg,
   type NetEvent,
+  type NetHappening,
   type NetMeat,
+  type NetRound,
+  type NetStanding,
   NETWORK,
-  sprintBurn,
-  stepMotion,
-  terrainSpeedFactor,
+  type PlayerInput,
+  type RoundSettings,
+  roundPhase,
+  stepLocomotion,
   type TestCommand,
   toWireInput,
   type WireInput,
+  zoneFromCode,
 } from '@extinct/shared';
 import type { PoseSample } from '../game/poseHistory.ts';
 import type { GameRoom } from './connect.ts';
 import type {
   Session,
+  SessionCarcass,
   SessionCritter,
   SessionDino,
   SessionEvent,
+  SessionHappening,
   SessionMeat,
+  SessionRound,
+  SessionStanding,
   TestHooks,
 } from '../game/session.ts';
 
@@ -39,6 +49,10 @@ export type RoomState = Schema & {
   readonly eggs: MapSchema<NetEgg>;
   readonly meat: MapSchema<NetMeat>;
   readonly critters: MapSchema<NetCritter>;
+  readonly carcasses: MapSchema<NetCarcass>;
+  readonly happenings: MapSchema<NetHappening>;
+  readonly round: NetRound;
+  readonly leaderboard: ArraySchema<NetStanding>;
 };
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -52,37 +66,32 @@ const PREDICTED_FIELDS = [
   'speed',
   'pushX',
   'pushZ',
+  'stamina',
+  'winded',
+  'refillIn',
+  'sprinting',
   'mass',
+  'carrying',
   'alive',
 ] as const satisfies readonly (keyof Predicted)[];
 
 type MirrorDino = Mutable<SessionDino>;
 type MirrorMeat = Mutable<SessionMeat>;
 type MirrorCritter = Mutable<SessionCritter>;
+type MirrorCarcass = Mutable<SessionCarcass>;
 
 const STEP_MS = 1000 / NETWORK.tickRate;
 
-/**
- * One tick of your own dinosaur's movement, exactly as the server's GameWorld does it: the
- * shared step function plus the mass sprinting burns. Prediction runs it for every input
- * sent, and re-runs the unacknowledged ones on top of each server correction.
- */
-function stepOwnDinosaur(state: Predicted, input: MoveInput, dt: number): void {
-  if (!state.alive) return;
-  const sprinting = isSprinting(input, state.mass);
-  const next = stepMotion(
-    state,
-    input,
-    { mass: state.mass, terrainFactor: terrainSpeedFactor(state.x, state.z) },
-    dt,
-  );
-  state.x = next.x;
-  state.z = next.z;
-  state.heading = next.heading;
-  state.speed = next.speed;
-  state.pushX = next.pushX;
-  state.pushZ = next.pushZ;
-  if (sprinting) state.mass -= sprintBurn(state.mass, dt);
+function standing(source: NetStanding): SessionStanding {
+  return {
+    dinoId: source.dino,
+    name: source.name,
+    mass: source.mass,
+    isBot: source.bot,
+    x: source.x,
+    z: source.z,
+    shown: source.shown,
+  };
 }
 
 /**
@@ -109,6 +118,9 @@ export class OnlineSession implements Session {
     speed: 0,
     alive: false,
   }));
+  readonly carcasses = new Map<number, MirrorCarcass>();
+  readonly happenings = new Map<number, SessionHappening>();
+  leaderboard: readonly SessionStanding[] = [];
   readonly test: TestHooks;
   player: MirrorDino | undefined;
   /** Called once if the connection is lost for good. */
@@ -118,7 +130,13 @@ export class OnlineSession implements Session {
   private readonly state: RoomState;
   private readonly predict: Predict<RoomState>;
   private readonly input: InputHandle<WireInput>;
-  private readonly wire: WireInput = { turn: 0, throttle: 0, sprint: false };
+  private readonly wire: WireInput = {
+    turn: 0,
+    throttle: 0,
+    sprint: false,
+    bite: false,
+    eat: false,
+  };
   private reconciler: Reconciler<Predicted> | undefined;
   /** The synced instances behind each mirror, for interpolated reads. */
   private readonly dinoSources = new Map<number, NetDino>();
@@ -127,6 +145,10 @@ export class OnlineSession implements Session {
   private readonly eggSeen = new Uint32Array(FOOD.eggCount);
   private frame = 0;
   private tickArrivedAt = 0;
+  /** A click waits here until an input goes out with it. */
+  private biteQueued = false;
+  /** The meteor has hit: the server holds everyone still, so prediction does too. */
+  private frozen = false;
 
   constructor(room: GameRoom) {
     this.room = room;
@@ -166,6 +188,9 @@ export class OnlineSession implements Session {
       endProtection: () => {
         command({ cmd: 'endProtection' });
       },
+      startEvent: (kind, ahead) => {
+        command({ cmd: 'startEvent', kind, ahead });
+      },
     };
   }
 
@@ -174,20 +199,43 @@ export class OnlineSession implements Session {
     return rtt > 0 ? rtt : null;
   }
 
-  get time(): number {
-    const sinceTick = Math.min((performance.now() - this.tickArrivedAt) / STEP_MS, 1);
-    return (this.state.tick + sinceTick) / NETWORK.tickRate;
+  /** Ticks since the server's last update arrived, as a fraction of a tick (for smooth clocks). */
+  private get sinceTick(): number {
+    return Math.min((performance.now() - this.tickArrivedAt) / STEP_MS, 1);
   }
 
-  advance(nowMs: number, _dt: number, input: MoveInput): readonly SessionEvent[] {
+  get time(): number {
+    return (this.state.tick + this.sinceTick) / NETWORK.tickRate;
+  }
+
+  get round(): SessionRound {
+    const round = this.state.round;
+    const settings = this.roundSettings();
+    const clock = Math.max(
+      0,
+      (this.state.tick + this.sinceTick - round.startTick) / NETWORK.tickRate,
+    );
+    const podium = Array.from(round.podium, standing);
+    return { number: round.number, clock, phase: roundPhase(clock, settings), settings, podium };
+  }
+
+  advance(nowMs: number, _dt: number, input: PlayerInput): readonly SessionEvent[] {
     this.ensureReconciler();
+    const round = this.state.round;
+    const serverClock = (this.state.tick - round.startTick) / NETWORK.tickRate;
+    this.frozen = roundPhase(serverClock, this.roundSettings()) !== 'playing';
     // One input per fixed step, sent before anything is drawn (the reconciler predicts each).
+    // A click rides along with the first input that goes out after it.
     const due = this.predict.tick(nowMs);
+    this.biteQueued ||= input.bite;
     toWireInput(input, this.wire);
     for (let i = 0; i < due; i++) {
       this.input.data.turn = this.wire.turn;
       this.input.data.throttle = this.wire.throttle;
       this.input.data.sprint = this.wire.sprint;
+      this.input.data.eat = this.wire.eat;
+      this.input.data.bite = this.biteQueued;
+      this.biteQueued = false;
       this.input.send();
     }
     this.mirror();
@@ -224,6 +272,16 @@ export class OnlineSession implements Session {
     void this.room.leave();
   }
 
+  private roundSettings(): RoundSettings {
+    const round = this.state.round;
+    return {
+      durationSeconds: round.durationSeconds,
+      meteorWarningAtSeconds: round.meteorWarningAtSeconds,
+      impactSequenceSeconds: round.impactSequenceSeconds,
+      intermissionSeconds: round.intermissionSeconds,
+    };
+  }
+
   /** Start predicting your own dinosaur as soon as the server has sent it. */
   private ensureReconciler(): void {
     if (this.reconciler) return;
@@ -236,8 +294,10 @@ export class OnlineSession implements Session {
       input: this.input,
       fields: PREDICTED_FIELDS,
       snap: NETWORK.snapDistance,
+      // Exactly the server's movement step (shared/movement.ts), so prediction agrees with it.
       step: (context, state, command) => {
-        stepOwnDinosaur(state, fromWireInput(command), context.dt);
+        if (!state.alive || this.frozen) return;
+        stepLocomotion(state, fromWireInput(command), context.dt);
       },
     });
   }
@@ -245,57 +305,7 @@ export class OnlineSession implements Session {
   /** Copy the synced state into the plain objects the Game reads. */
   private mirror(): void {
     const frame = ++this.frame;
-    const seenDinos = new Set<number>();
-    this.state.dinos.forEach((source, key) => {
-      const id = Number(key);
-      seenDinos.add(id);
-      this.dinoSources.set(id, source);
-      let mirror = this.dinos.get(id);
-      if (!mirror) {
-        mirror = {
-          id,
-          name: source.name,
-          isBot: source.bot,
-          x: 0,
-          z: 0,
-          heading: 0,
-          speed: 0,
-          mass: 0,
-          alive: false,
-          protectedFor: 0,
-          sprinting: false,
-          respawnIn: 0,
-          eatenBy: null,
-          massAtDeath: 0,
-        };
-        this.dinos.set(id, mirror);
-      }
-      mirror.x = source.x;
-      mirror.z = source.z;
-      mirror.heading = source.heading;
-      mirror.speed = source.speed;
-      mirror.mass = source.mass;
-      mirror.alive = source.alive;
-      mirror.protectedFor = source.protectedFor;
-      mirror.sprinting = source.sprinting;
-      mirror.respawnIn = source.respawnIn;
-      mirror.eatenBy = source.eatenBy === 0 ? null : source.eatenBy;
-      mirror.massAtDeath = source.massAtDeath;
-      if (source.owner === this.room.sessionId) this.player = mirror;
-    });
-    for (const id of this.dinos.keys()) {
-      if (seenDinos.has(id)) continue;
-      this.dinos.delete(id);
-      this.dinoSources.delete(id);
-    }
-    // Your own dinosaur is where prediction says it is, not where the server last saw it.
-    if (this.player && this.reconciler) {
-      const predicted = this.reconciler.state;
-      this.player.x = predicted.x;
-      this.player.z = predicted.z;
-      this.player.heading = predicted.heading;
-      this.player.speed = predicted.speed;
-    }
+    this.mirrorDinos();
 
     this.state.eggs.forEach((source, key) => {
       const slot = Number(key);
@@ -341,5 +351,126 @@ export class OnlineSession implements Session {
       critter.speed = source.speed;
       critter.alive = source.alive;
     });
+
+    this.mirrorCarcasses();
+    this.mirrorHappenings();
+    this.leaderboard = Array.from(this.state.leaderboard, standing);
+  }
+
+  private mirrorDinos(): void {
+    const seenDinos = new Set<number>();
+    this.state.dinos.forEach((source, key) => {
+      const id = Number(key);
+      seenDinos.add(id);
+      this.dinoSources.set(id, source);
+      let mirror = this.dinos.get(id);
+      if (!mirror) {
+        mirror = {
+          id,
+          name: source.name,
+          isBot: source.bot,
+          x: 0,
+          z: 0,
+          heading: 0,
+          speed: 0,
+          mass: 0,
+          alive: false,
+          protectedFor: 0,
+          sprinting: false,
+          respawnIn: 0,
+          eatenBy: null,
+          massAtDeath: 0,
+          rankAtDeath: 0,
+          rank: 0,
+          stamina: 1,
+          winded: false,
+          carrying: false,
+          eating: false,
+        };
+        this.dinos.set(id, mirror);
+      }
+      mirror.x = source.x;
+      mirror.z = source.z;
+      mirror.heading = source.heading;
+      mirror.speed = source.speed;
+      mirror.mass = source.mass;
+      mirror.alive = source.alive;
+      mirror.protectedFor = source.protectedFor;
+      mirror.sprinting = source.sprinting;
+      mirror.respawnIn = source.respawnIn;
+      mirror.eatenBy = source.eatenBy === 0 ? null : source.eatenBy;
+      mirror.massAtDeath = source.massAtDeath;
+      mirror.rankAtDeath = source.rankAtDeath;
+      mirror.rank = source.rank;
+      mirror.stamina = source.stamina;
+      mirror.winded = source.winded;
+      mirror.carrying = source.carrying;
+      mirror.eating = source.eating;
+      if (source.owner === this.room.sessionId) this.player = mirror;
+    });
+    for (const id of this.dinos.keys()) {
+      if (seenDinos.has(id)) continue;
+      this.dinos.delete(id);
+      this.dinoSources.delete(id);
+    }
+    // Your own dinosaur is where prediction says it is, not where the server last saw it.
+    if (this.player && this.reconciler) {
+      const predicted = this.reconciler.state;
+      this.player.x = predicted.x;
+      this.player.z = predicted.z;
+      this.player.heading = predicted.heading;
+      this.player.speed = predicted.speed;
+      this.player.stamina = predicted.stamina;
+      this.player.winded = predicted.winded;
+      this.player.sprinting = predicted.sprinting;
+    }
+  }
+
+  private mirrorCarcasses(): void {
+    const seen = new Set<number>();
+    this.state.carcasses.forEach((source, key) => {
+      const id = Number(key);
+      seen.add(id);
+      let carcass = this.carcasses.get(id);
+      if (!carcass) {
+        carcass = {
+          id,
+          x: 0,
+          z: 0,
+          heading: 0,
+          food: 0,
+          size: source.size,
+          radius: source.radius,
+          kind: CARCASS_KIND_CODES[source.kind] ?? 'kill',
+          carrierId: null,
+        };
+        this.carcasses.set(id, carcass);
+      }
+      carcass.x = source.x;
+      carcass.z = source.z;
+      carcass.heading = source.heading;
+      carcass.food = source.food;
+      carcass.carrierId = source.carrier === 0 ? null : source.carrier;
+    });
+    for (const id of this.carcasses.keys()) if (!seen.has(id)) this.carcasses.delete(id);
+  }
+
+  private mirrorHappenings(): void {
+    const seen = new Set<number>();
+    this.state.happenings.forEach((source, key) => {
+      const id = Number(key);
+      seen.add(id);
+      if (this.happenings.has(id)) return;
+      this.happenings.set(id, {
+        id,
+        kind: HAPPENING_KIND_CODES[source.kind] ?? 'carcass',
+        variant: source.variant,
+        x: source.x,
+        z: source.z,
+        zone: zoneFromCode(source.zone),
+        food: source.food,
+      });
+    });
+    for (const id of this.happenings.keys()) if (!seen.has(id)) this.happenings.delete(id);
   }
 }

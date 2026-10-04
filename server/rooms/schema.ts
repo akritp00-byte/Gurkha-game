@@ -1,5 +1,14 @@
 import { schema, t } from '@colyseus/schema';
-import type { NetCritter, NetDino, NetEgg, NetMeat } from '@extinct/shared';
+import type {
+  NetCarcass,
+  NetCritter,
+  NetDino,
+  NetEgg,
+  NetHappening,
+  NetMeat,
+  NetRound,
+  NetStanding,
+} from '@extinct/shared';
 
 /**
  * The room state as clients receive it. Each collection is filtered per client by a
@@ -24,9 +33,17 @@ export const DinoState = schema(
     sprinting: t.boolean().default(false),
     protectedFor: t.float32().default(0),
     respawnIn: t.float32().default(0),
-    /** Id of whoever ate this dinosaur last, 0 if nobody. */
+    /** Id of whoever killed this dinosaur last, 0 if nobody. */
     eatenBy: t.uint16().default(0),
     massAtDeath: t.float32().default(0),
+    rankAtDeath: t.uint8().default(0),
+    /** Place on the leaderboard, 0 while dead. */
+    rank: t.uint8().default(0),
+    stamina: t.float32().default(1),
+    winded: t.boolean().default(false),
+    refillIn: t.float32().default(0),
+    carrying: t.boolean().default(false),
+    eating: t.boolean().default(false),
   },
   'Dino',
 );
@@ -57,15 +74,80 @@ export const CritterState = schema(
 );
 export type CritterState = InstanceType<typeof CritterState>;
 
+/** `kind` and `carrier` are codes: see CARCASS_KIND_CODES in shared/net.ts; carrier 0 is nobody. */
+export const CarcassState = schema(
+  {
+    x: t.float32().default(0),
+    z: t.float32().default(0),
+    heading: t.float32().default(0),
+    food: t.float32().default(0),
+    size: t.float32().default(0),
+    radius: t.float32().default(0),
+    kind: t.uint8().default(0),
+    carrier: t.uint16().default(0),
+  },
+  'Carcass',
+);
+export type CarcassState = InstanceType<typeof CarcassState>;
+
+/** A running world event, for everyone's minimap. Codes as in shared/net.ts. */
+export const HappeningState = schema(
+  {
+    kind: t.uint8().default(0),
+    variant: t.uint8().default(0),
+    x: t.float32().default(0),
+    z: t.float32().default(0),
+    zone: t.uint8().default(0),
+    food: t.float32().default(0),
+  },
+  'Happening',
+);
+export type HappeningState = InstanceType<typeof HappeningState>;
+
+/** A place on the leaderboard or the podium. */
+export const StandingState = schema(
+  {
+    dino: t.uint16().default(0),
+    name: t.string().default(''),
+    mass: t.float32().default(0),
+    bot: t.boolean().default(false),
+    x: t.float32().default(0),
+    z: t.float32().default(0),
+    shown: t.boolean().default(false),
+  },
+  'Standing',
+);
+export type StandingState = InstanceType<typeof StandingState>;
+
+/** The round clock runs from `startTick`; the podium fills at the meteor's impact. */
+export const RoundSchema = schema(
+  {
+    number: t.uint16().default(1),
+    startTick: t.uint32().default(0),
+    durationSeconds: t.float32().default(0),
+    meteorWarningAtSeconds: t.float32().default(0),
+    impactSequenceSeconds: t.float32().default(0),
+    intermissionSeconds: t.float32().default(0),
+    podium: t.array(StandingState),
+  },
+  'Round',
+);
+export type RoundSchema = InstanceType<typeof RoundSchema>;
+
 export const GameState = schema(
   {
     /** Ticks simulated so far: world time is tick / NETWORK.tickRate (the vents run on it). */
     tick: t.uint32().default(0),
-    /** Keyed by dinosaur id; eggs by slot, meat and critters by id. */
+    /** Keyed by dinosaur id; eggs by slot, meat, critters and carcasses by id. */
     dinos: t.map(DinoState).view(),
     eggs: t.map(EggState).view(),
     meat: t.map(MeatState).view(),
     critters: t.map(CritterState).view(),
+    carcasses: t.map(CarcassState).view(),
+    /** Everyone gets these: world events (keyed by id), the round and the top ten. */
+    happenings: t.map(HappeningState),
+    round: t.ref(RoundSchema),
+    leaderboard: t.array(StandingState),
   },
   'GameState',
 );
@@ -76,7 +158,13 @@ export type GameState = InstanceType<typeof GameState>;
  * "not turning" is exactly zero.
  */
 export const InputState = schema(
-  { turn: t.int8().default(0), throttle: t.uint8().default(0), sprint: t.boolean().default(false) },
+  {
+    turn: t.int8().default(0),
+    throttle: t.uint8().default(0),
+    sprint: t.boolean().default(false),
+    bite: t.boolean().default(false),
+    eat: t.boolean().default(false),
+  },
   'Input',
 );
 export type InputState = InstanceType<typeof InputState>;
@@ -90,4 +178,8 @@ export type SchemaMatchesProtocol = [
   Expect<Fits<EggState, NetEgg>>,
   Expect<Fits<MeatState, NetMeat>>,
   Expect<Fits<CritterState, NetCritter>>,
+  Expect<Fits<CarcassState, NetCarcass>>,
+  Expect<Fits<HappeningState, NetHappening>>,
+  Expect<Fits<StandingState, NetStanding>>,
+  Expect<Fits<RoundSchema, NetRound>>,
 ];

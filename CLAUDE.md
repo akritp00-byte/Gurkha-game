@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Conventions for working on EXTINCT.io. The brief, rules, numbers and milestone plan are in `BUILD_PROMPT.md`: read it before starting a milestone, and do one milestone at a time.
+Conventions for working on EXTINCT.io. The brief, rules, numbers and milestone plan are in `BUILD_PROMPT.md`: read it before starting a milestone, and do one milestone at a time. Some rules have since changed at the user's request; see "Rule changes since the brief" below, which wins where they differ.
 
 ## Commands
 
@@ -21,31 +21,42 @@ pnpm format                  # fix formatting
 - **pnpm monorepo** with `client/`, `server/` and `shared/`. Source sits directly in each package folder (no `src/`), so paths match the brief: `shared/config.ts`, `client/render/`, `server/systems/`.
 - **`shared/`** is pure TypeScript game logic and constants used by both sides. No DOM, Node, Three.js or Colyseus imports (ESLint enforces this). Keep it deterministic, because the same code runs on the server and in client-side prediction. Import it as `@extinct/shared`; `shared/index.ts` re-exports everything.
   - `config.ts`: gameplay and network tuning.
-  - `movement.ts`: `stepMotion`, the movement step function (sprint, terrain slowdown and pushes), plus the speed and turn-rate curves. `sanitizeInput` makes untrusted input safe.
-  - `eating.ts`: the eat rule (`outweighs`, bite zones, `massGained`) and threat colours (`threatBetween`).
+  - `movement.ts`: `PlayerInput` (turn, throttle, sprint, bite, eat) and `stepLocomotion`, one tick of a dinosaur's movement: stamina (`stepStamina`), then `stepMotion` (sprint, terrain, carrying and eating slowdowns, pushes). Also the speed and turn-rate curves. `sanitizeInput` makes untrusted input safe.
+  - `eating.ts`: the eat rule (`outweighs`, bite zones, the wider `attackZone` of an aimed bite, `massGained`), carcass eating (`eatRate`, `canCarry`) and threat colours (`threatBetween`).
   - `visibility.ts`: fern hiding (`isHiddenInFerns`, `canSee`). Bots perceive through it, and the server will filter what clients receive with it.
   - `tiers.ts`: tier lookup and body scale.
-  - `sim/world.ts`: `GameWorld`, the whole simulation: dinosaurs and bots, eggs, meat, critters, vents, eating, death, respawn and spawn protection. `step()` returns events (`dinoEaten`, `tierChanged`, `meatDropped`, `ventErupted`, ...) for effects and, later, network messages. Seeded, so the same seed and inputs replay exactly.
-  - `sim/entities.ts`: the entity and event types. `sim/bots.ts`: bot brains (`botInput`). `sim/vents.ts`: the vent clock. `sim/names.ts`: bot names.
-  - `world/layout.ts`: level design, meaning where the volcano, vents, river, tar pits and fern patches are.
-  - `world/terrain.ts`: island heights and zones, including `terrainSpeedFactor`. `islandHeightfield()` is built once; `heightAt()` matches the rendered triangles exactly.
-  - `net.ts`: the network protocol shared by server and client: the room name, join options, wire inputs (`toWireInput` / `fromWireInput`), event messages, test commands, `cleanName`, and the shapes of the synced state (`NetDino`, ...).
+  - `sim/world.ts`: `GameWorld`, the whole simulation: dinosaurs and bots, eggs, meat, critters, vents, bites, carcasses (carried or on the ground), eating, death, respawn, spawn protection, world events (`happenings`: huge carcasses and meat drops) and the round loop with its podium. It also keeps each dinosaur's leaderboard `rank`. `step()` returns events (`dinoKilled`, `bite`, `tierChanged`, `happeningStarted`, `meteorImpact`, `roundStarted`, ...) for effects and network messages. Seeded, so the same seed and inputs replay exactly.
+  - `sim/round.ts`: round timings and phases (`playing`, `impact`, `podium`), shared by the world, the server and the HUD.
+  - `sim/entities.ts`: the entity and event types. `sim/bots.ts`: bot brains (`botInput`), which steer, bite and eat. `sim/vents.ts`: the vent clock. `sim/names.ts`: bot names and event carcass species.
+  - `world/layout.ts`: level design, meaning where the volcano, vents, river, tar pits, fern patches and danger zones (the Ashlands and the Tar Pits) are.
+  - `world/terrain.ts`: island heights and zones, including `terrainSpeedFactor`, `dangerZoneAt` and `foodMultiplierAt`. `islandHeightfield()` is built once; `heightAt()` matches the rendered triangles exactly.
+  - `net.ts`: the network protocol shared by server and client: the room name, join options, wire inputs (`toWireInput` / `fromWireInput`), event messages, test commands, `cleanName`, the codes that kinds and zones travel as, and the shapes of the synced state (`NetDino`, `NetCarcass`, `NetRound`, ...).
 - **`server/`** is the authoritative Colyseus 0.18 server. `index.ts` is the entry point. `app.ts` builds the server without binding a port, so tests can start it on port 0, and serves `/health` and `/stats`. `env.ts` loads the repo-root `.env`. Clients only ever send inputs. Never trust a position sent by a client.
-  - `rooms/GameRoom.ts`: one game room. It runs `GameWorld` on Colyseus' fixed timestep, takes one input per player per tick from the input buffer, tops the room up with bots, mirrors the world into the schema, filters each client's `StateView` by distance and fern hiding, and sends events. `TestGameRoom` adds the test commands.
+  - `rooms/GameRoom.ts`: one game room. It runs `GameWorld` on Colyseus' fixed timestep, takes one input per player per tick from the input buffer (a late packet's repeat never repeats a bite), tops the room up with bots, mirrors the world into the schema, filters each client's `StateView` by distance and fern hiding (a carcass in a hidden dinosaur's mouth stays hidden too), and sends events. The round, the leaderboard and world events go to everyone. `TestGameRoom` adds the test commands.
   - `rooms/schema.ts`: the synced state, built with `schema()`. A compile-time check keeps it in line with the `Net*` shapes in `shared/net.ts`.
   - `testing/`: `harness.ts` (start a server on a free port, `TestClient`, `waitFor`) and `loadTest.ts`. `loadtest.ts` is the `pnpm loadtest` command.
-  - `--test-commands` (passed by `pnpm dev`, never by `pnpm start`) makes the server honour test commands and the `seed` and `bots` join options.
+  - `--test-commands` (passed by `pnpm dev`, never by `pnpm start`) makes the server honour test commands and the `seed`, `bots` and `roundSeconds` join options.
 - **`client/`** is Three.js + Vite, with no game engine. `assets/` and `audio/` come later.
   - `game/Game.ts`: the game loop. It samples input, advances a `Session` (`game/session.ts`), turns its events into effects and renders it. A session is either `game/OfflineSession.ts`, which steps `GameWorld` (with bots) in the browser at `NETWORK.tickRate` and interpolates between ticks (`poseHistory.ts`), or `net/OnlineSession.ts`.
   - `input/`: keyboard, held-mouse and touch-joystick steering, plus sprint (Shift or the touch button). The pure mappings live in `steering.ts`, so they can be unit tested.
-  - `render/`: `terrain.ts`, `vegetation.ts`, `eggs.ts`, `meat.ts`, `critters.ts` and `threatRings.ts` (each one instanced draw call), `vents.ts`, `environment.ts` (sky, fog, sun shadows that follow the player), `cameraRig.ts`, `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each (`crowd.ts` keeps one view per dinosaur).
-  - `ui/`: HUD with status chips, name tags, kill feed, death card, F3 debug overlay, controls hint and CSS.
+  - `render/`: `terrain.ts`, `vegetation.ts`, `eggs.ts`, `meat.ts`, `critters.ts`, `carcasses.ts`, `beacons.ts` and `threatRings.ts` (each one instanced draw call), `vents.ts`, `meteor.ts` (fireball, debris and shockwave), `environment.ts` (sky, fog, sun shadows that follow the player, and `setDoom` for the red meteor sky), `cameraRig.ts` (with punch, shake and rumble), `quality.ts`, and `dino/`, the procedural skinned placeholder dinosaurs with one draw call each (`crowd.ts` keeps one view per dinosaur).
+  - `ui/`: HUD with status chips and the stamina bar, round clock, leaderboard, minimap, podium, banners, name tags, kill feed, death card, F3 debug overlay, controls hint and CSS.
   - `net/`: `connect.ts` joins a room (or times out, and `main.ts` falls back to offline play). `OnlineSession.ts` sends inputs, predicts your own dinosaur with Colyseus' `Predict` reconciler and the shared step function, and interpolates everything else.
   - `dev/`: developer pages that aren't part of the build, e.g. `/dev/dinos.html`.
 - **Multiplayer:** the client sends one input per tick (turn, throttle, sprint; abilities come in M6), as small integers. The server simulates at `NETWORK.tickRate`, consumes one input per player per tick, and sends a patch after every tick, filtered to `NETWORK.interestRadius` with fern hiding enforced there. The client predicts its own dino with the shared step function and reconciles against the server. Other dinos are interpolated `NETWORK.interpolationDelayMs` in the past.
-  - Anything the client predicts must step exactly as `GameWorld` does. If you change how the player's dinosaur moves, change `stepOwnDinosaur` in `OnlineSession.ts` to match.
+  - The server and the client's prediction both move dinosaurs with `stepLocomotion`, so they agree. Anything it reads (stamina, carrying, mass) must be in `PREDICTED_FIELDS` in `OnlineSession.ts`. Prediction also stands still while the round is frozen.
   - Headings are continuous (never wrapped), so interpolation and reconciliation don't see 2π jumps.
   - Colyseus pitfall: set `patchRate = null` after `setFixedTimestep`, never before, or a second clock starves the fixed timestep.
+
+## Rule changes since the brief
+
+Asked for after M3, because progression felt slow. These override `BUILD_PROMPT.md` §3 and §8:
+
+- **Eating dinosaurs takes a bite**, not contact: left click (or Space, or the Bite button) kills anything 1.2× smaller in reach. Its carcass (70% of its mass) goes in your mouth; hold E (or the Eat button) to eat it. Biting a dinosaur too close in size to kill shoves it and knocks its food loose.
+- **Sprinting runs on stamina**, not mass, and drops no meat. Meat now comes from world events.
+- **Mouse steering uses the right button**, since the left one bites. E eats, so the M6 ability needs another key.
+- **World events and danger zones** were added: huge carcasses and meat drops on a timer, and zones where food is worth 3–4× more.
+- **Critters and fleeing bots are easier to catch** than the brief's numbers made them.
 
 ## Conventions
 
@@ -65,9 +76,10 @@ pnpm format                  # fix formatting
   - Frame rates measured there mean nothing. Judge performance by the overlay's CPU time, draw calls and triangles, and check FPS on real hardware.
   - Anything integrated over frame time must stay stable at long frames: frames are clamped to 0.25 s, and springs are sub-stepped (see `cameraRig.ts`).
 - **Debug hooks:**
-  - URL options: `?offline` (the sandbox, no server), `?name=`, `?room=` (a room of its own), `?seed=` (repeatable island and spawn), `?bots=` (offline default 15), `?mass=` (offline only), `?debug` (open the F3 overlay) and `?quality=low|medium|high`. Online, only a test server honours `?seed=` and `?bots=`, when they come with the join that creates the room.
+  - URL options: `?offline` (the sandbox, no server), `?name=`, `?room=` (a room of its own), `?seed=` (repeatable island and spawn), `?bots=` (offline default 15), `?mass=` (offline only), `?round=` (round length in seconds), `?debug` (open the F3 overlay) and `?quality=low|medium|high`. Online, only a test server honours `?seed=`, `?bots=` and `?round=`, when they come with the join that creates the room.
   - Most browser tests play offline (`openGame` adds `?offline`). `openOnlineGame(page, { room, name })` joins the dev server instead, in a room of its own.
-  - `window.__extinct` provides `state()`, `others()`, `stats()`, `bots()`, `setMass()`, `placeEggAhead()`, `placeDinoAhead()`, `teleport()` and `endProtection()` for tests and the console. Online, `setMass()`, `teleport()` and `endProtection()` become test commands, which only a server started with `--test-commands` (`pnpm dev`) obeys. Production servers ignore them. `placeEggAhead()`, `placeDinoAhead()` and `bots()` are offline only.
+  - `window.__extinct` provides `state()`, `others()`, `stats()`, `bots()`, `leaderboard()`, `podium()`, `carcasses()`, `setMass()`, `placeEggAhead()`, `placeDinoAhead()`, `teleport()`, `endProtection()` and `startEvent()` for tests and the console. Online, `setMass()`, `teleport()`, `endProtection()` and `startEvent()` become test commands, which only a server started with `--test-commands` (`pnpm dev`) obeys. Production servers ignore them. `placeEggAhead()`, `placeDinoAhead()` and `bots()` are offline only.
+  - To bite something in a browser test, place a bot that stands still (`placeDinoAhead(page, mass, distance, facing, side, true)`) and `clickToBite(page)`: a live bot runs off before a slow page's click lands.
 - **Dependencies:** as few as possible. Explain why before adding one. Ask before changing the stack, buying assets or signing up for paid services.
 - **Secrets:** `.env` is git-ignored. Update `.env.example` whenever you add a variable. Browser-visible variables must start with `VITE_` and must never hold secrets.
 - **Assets and sounds:** CC0 or properly licensed only, recorded in `CREDITS.md` before committing.

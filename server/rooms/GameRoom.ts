@@ -1,24 +1,43 @@
 import { type Client, Room } from '@colyseus/core';
 import { type Ref, StateView } from '@colyseus/schema';
 import {
+  CARCASS_KIND_CODES,
   canSee,
   clamp,
   cleanName,
   type Dino,
   fromWireInput,
   GameWorld,
+  HAPPENING_KIND_CODES,
+  type HappeningKind,
+  isHiddenInFerns,
   type JoinOptions,
   keepOnIsland,
   MESSAGE,
-  type MoveInput,
   type NetEvent,
+  type NetStanding,
   NETWORK,
+  type PlayerInput,
   ROOM,
+  ROUND,
+  roundOfLength,
+  type Standing,
   type TestCommand,
   WIRE_INPUT,
   type WorldEvent,
+  zoneCode,
 } from '@extinct/shared';
-import { CritterState, DinoState, EggState, GameState, InputState, MeatState } from './schema.ts';
+import {
+  CarcassState,
+  CritterState,
+  DinoState,
+  EggState,
+  GameState,
+  HappeningState,
+  InputState,
+  MeatState,
+  StandingState,
+} from './schema.ts';
 import { TickTimer } from './tickTimer.ts';
 
 /** What the room tracks for each connected (or reconnecting) player. */
@@ -32,6 +51,7 @@ interface Player {
     readonly eggs: Set<EggState>;
     readonly meat: Set<MeatState>;
     readonly critters: Set<CritterState>;
+    readonly carcasses: Set<CarcassState>;
   };
   /** False while a dropped connection waits to reconnect: the dinosaur stands still. */
   connected: boolean;
@@ -41,11 +61,14 @@ interface Player {
 
 /** Positions travel as float32, so values that round to the same float32 aren't resent. */
 const f32 = Math.fround;
+/** Test rounds can't be shorter than this. */
+const MIN_TEST_ROUND_SECONDS = 5;
 
 /**
  * A game room (BUILD_PROMPT.md §5): the server runs the shared GameWorld at
- * NETWORK.tickRate, one input per player per tick, and sends each client only what's near it.
- * Bots keep the room at ROOM.minDinosaurs and leave as players join.
+ * NETWORK.tickRate, one input per player per tick, and sends each client only what's near it,
+ * plus the round, the leaderboard and the world events, which everyone gets. Bots keep the room
+ * at ROOM.minDinosaurs and leave as players join.
  */
 export class GameRoom extends Room<{ state: GameState; input: InputState }> {
   /** Rooms running in this process, for the /stats route. */
@@ -59,7 +82,11 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
   private readonly players = new Map<string, Player>();
   private readonly dinoStates = new Map<number, DinoState>();
   private readonly meatStates = new Map<number, MeatState>();
-  private readonly inputMap = new Map<number, MoveInput>();
+  private readonly carcassStates = new Map<number, CarcassState>();
+  private readonly happeningStates = new Map<number, HappeningState>();
+  private readonly inputMap = new Map<number, PlayerInput>();
+  /** Events caused between ticks (test commands), sent with the next tick's. */
+  private readonly pendingEvents: WorldEvent[] = [];
   /** Fixed number of bots asked for by a test, instead of topping up to ROOM.minDinosaurs. */
   private botTarget: number | undefined;
   private world!: GameWorld;
@@ -69,12 +96,18 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
   override inputs = this.defineInput(InputState, {
     bufferMaxSize: NETWORK.inputBufferSize,
     sanitize: { turn: [-WIRE_INPUT.turn, WIRE_INPUT.turn], throttle: [0, WIRE_INPUT.throttle] },
-    // No input this tick (a late packet): keep doing the same thing for a moment. A player
-    // who has dropped, or stopped sending (a hidden tab), stands still.
+    // No input this tick (a late packet): keep steering and eating for a moment, but never
+    // repeat a bite. A player who has dropped, or stopped sending (a hidden tab), stands still.
     idle: ({ latest, sessionId }) => {
       const player = this.players.get(sessionId);
       const late = player?.connected === true && player.missedInputs < NETWORK.inputGraceTicks;
-      return latest && late ? latest : true;
+      if (!latest || !late) return true;
+      return {
+        turn: latest.turn,
+        throttle: latest.throttle,
+        sprint: latest.sprint,
+        eat: latest.eat,
+      };
     },
   });
 
@@ -87,7 +120,14 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     if (testing && typeof options.bots === 'number' && Number.isFinite(options.bots)) {
       this.botTarget = clamp(Math.floor(options.bots), 0, ROOM.maxPlayers);
     }
-    this.world = new GameWorld({ seed });
+    const roundSeconds =
+      testing && typeof options.roundSeconds === 'number' && Number.isFinite(options.roundSeconds)
+        ? clamp(options.roundSeconds, MIN_TEST_ROUND_SECONDS, ROUND.durationSeconds)
+        : undefined;
+    this.world = new GameWorld({
+      seed,
+      round: roundSeconds === undefined ? undefined : roundOfLength(roundSeconds),
+    });
     this.state = new GameState();
     GameRoom.live.add(this);
     this.world.eggs.forEach((egg, slot) => {
@@ -96,6 +136,13 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     for (const critter of this.world.critters) {
       this.state.critters.set(String(critter.id), new CritterState());
     }
+    const settings = this.world.round.settings;
+    Object.assign(this.state.round, {
+      durationSeconds: settings.durationSeconds,
+      meteorWarningAtSeconds: settings.meteorWarningAtSeconds,
+      impactSequenceSeconds: settings.impactSequenceSeconds,
+      intermissionSeconds: settings.intermissionSeconds,
+    });
     this.syncCritters();
     this.fillBots();
 
@@ -118,7 +165,13 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       client,
       dino,
       view: new StateView(),
-      seen: { dinos: new Set(), eggs: new Set(), meat: new Set(), critters: new Set() },
+      seen: {
+        dinos: new Set(),
+        eggs: new Set(),
+        meat: new Set(),
+        critters: new Set(),
+        carcasses: new Set(),
+      },
       connected: true,
       missedInputs: 0,
     };
@@ -162,6 +215,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       players: this.players.size,
       dinos: this.world.dinos.size,
       tick: this.ticks,
+      round: this.world.round.number,
       ...this.timer.summary(),
     };
   }
@@ -178,14 +232,24 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       player.missedInputs = inputs.wasIdle ? player.missedInputs + 1 : 0;
       this.inputMap.set(player.dino.id, fromWireInput(wire));
     }
-    const events = this.world.step(dt, this.inputMap);
+    const events = [...this.pendingEvents.splice(0), ...this.world.step(dt, this.inputMap)];
     this.ticks++;
     this.state.tick = this.ticks;
+    if (events.some((event) => event.type === 'roundStarted')) {
+      this.state.round.startTick = this.ticks;
+    }
 
     this.syncDinos();
     this.syncEggs();
     this.syncMeat();
     this.syncCritters();
+    this.syncCarcasses();
+    this.syncHappenings();
+    this.syncRound();
+    const roundChanged = events.some(
+      (event) => event.type === 'meteorImpact' || event.type === 'roundStarted',
+    );
+    if (roundChanged || this.ticks % NETWORK.leaderboardRefreshTicks === 0) this.syncLeaderboard();
     const refreshSlowViews = this.ticks % NETWORK.slowViewRefreshTicks === 0;
     for (const player of this.players.values()) this.refreshView(player, refreshSlowViews);
     this.sendEvents(events);
@@ -245,6 +309,13 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     state.respawnIn = f32(dino.alive ? 0 : Math.max(dino.respawnIn, 0));
     state.eatenBy = dino.eatenBy ?? 0;
     state.massAtDeath = f32(dino.massAtDeath);
+    state.rankAtDeath = dino.rankAtDeath;
+    state.rank = dino.rank;
+    state.stamina = f32(dino.stamina);
+    state.winded = dino.winded;
+    state.refillIn = f32(dino.refillIn);
+    state.carrying = dino.carrying;
+    state.eating = dino.eating;
   }
 
   private syncEggs(): void {
@@ -285,12 +356,100 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     }
   }
 
+  private syncCarcasses(): void {
+    for (const [id, state] of this.carcassStates) {
+      if (this.world.carcasses.has(id)) continue;
+      this.carcassStates.delete(id);
+      this.state.carcasses.delete(String(id));
+      for (const player of this.players.values()) player.seen.carcasses.delete(state);
+    }
+    for (const carcass of this.world.carcasses.values()) {
+      let state = this.carcassStates.get(carcass.id);
+      if (!state) {
+        state = new CarcassState({
+          kind: CARCASS_KIND_CODES.indexOf(carcass.kind),
+          size: f32(carcass.size),
+          radius: f32(carcass.radius),
+        });
+        this.carcassStates.set(carcass.id, state);
+        this.state.carcasses.set(String(carcass.id), state);
+      }
+      state.x = f32(carcass.x);
+      state.z = f32(carcass.z);
+      state.heading = f32(carcass.heading);
+      state.food = f32(carcass.food);
+      state.carrier = carcass.carrierId ?? 0;
+    }
+  }
+
+  private syncHappenings(): void {
+    for (const id of this.happeningStates.keys()) {
+      if (this.world.happenings.has(id)) continue;
+      this.happeningStates.delete(id);
+      this.state.happenings.delete(String(id));
+    }
+    for (const happening of this.world.happenings.values()) {
+      if (this.happeningStates.has(happening.id)) continue;
+      const state = new HappeningState({
+        kind: HAPPENING_KIND_CODES.indexOf(happening.kind),
+        variant: happening.variant,
+        x: f32(happening.x),
+        z: f32(happening.z),
+        zone: zoneCode(happening.zone),
+        food: f32(happening.food),
+      });
+      this.happeningStates.set(happening.id, state);
+      this.state.happenings.set(String(happening.id), state);
+    }
+  }
+
+  /** The round number, and the podium once the meteor has hit (cleared for the next round). */
+  private syncRound(): void {
+    const round = this.state.round;
+    const world = this.world.round;
+    round.number = world.number;
+    if (world.podium.length === round.podium.length) return;
+    round.podium.clear();
+    for (const standing of world.podium) {
+      round.podium.push(new StandingState(this.standingFields(standing, false)));
+    }
+  }
+
+  /** The top ten, with coarse positions of the first few for the minimap. */
+  private syncLeaderboard(): void {
+    const top = this.world.standings(NETWORK.leaderboardSize);
+    const board = this.state.leaderboard;
+    while (board.length > top.length) board.pop();
+    while (board.length < top.length) board.push(new StandingState());
+    top.forEach((standing, index) => {
+      // Assigning plain fields runs the schema's setters, which skip unchanged values.
+      Object.assign(board[index], this.standingFields(standing, index < NETWORK.minimapLeaders));
+    });
+  }
+
+  private standingFields(standing: Standing, onMinimap: boolean): NetStanding {
+    const dino = this.world.dinos.get(standing.dinoId);
+    const shown = onMinimap && dino !== undefined && dino.alive && !isHiddenInFerns(dino);
+    const coarse = (value: number) =>
+      Math.round(value / NETWORK.minimapPrecision) * NETWORK.minimapPrecision;
+    return {
+      dino: standing.dinoId,
+      name: standing.name,
+      mass: f32(standing.mass),
+      bot: standing.isBot,
+      x: shown ? coarse(dino.x) : 0,
+      z: shown ? coarse(dino.z) : 0,
+      shown,
+    };
+  }
+
   // --- Interest management --------------------------------------------------------------
 
   /**
    * Show a player what's near its dinosaur and hide the rest (BUILD_PROMPT.md §5). Dinosaurs
-   * hidden in ferns stay out of the view entirely, so no client can reveal them. Eggs and
-   * meat hardly move, so they're only re-checked when `includeSlow` is set.
+   * hidden in ferns stay out of the view entirely, so no client can reveal them, and so does a
+   * carcass in a hidden dinosaur's mouth. Eggs and meat hardly move, so they're only re-checked
+   * when `includeSlow` is set.
    */
   private refreshView(player: Player, includeSlow: boolean): void {
     const viewer = player.dino;
@@ -310,6 +469,16 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       const visible =
         dino === viewer || (dino.alive && near(dino.x, dino.z, seen) && canSee(viewer, dino));
       this.setVisible(player.view, player.seen.dinos, state, visible);
+    }
+    for (const [id, state] of this.carcassStates) {
+      const carcass = this.world.carcasses.get(id);
+      if (!carcass) continue;
+      const carrier =
+        carcass.carrierId === null ? undefined : this.dinoStates.get(carcass.carrierId);
+      const visible = carrier
+        ? player.seen.dinos.has(carrier)
+        : near(carcass.x, carcass.z, player.seen.carcasses.has(state));
+      this.setVisible(player.view, player.seen.carcasses, state, visible);
     }
     this.world.critters.forEach((critter) => {
       const state = this.state.critters.get(String(critter.id));
@@ -353,34 +522,22 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
   /** Tell each player what it should hear about from this tick. */
   private sendEvents(events: readonly WorldEvent[]): void {
     if (events.length === 0) return;
-    const shared: NetEvent[] = [];
-    for (const event of events) {
-      if (event.type === 'dinoEaten') {
-        const eater = this.world.dinos.get(event.eaterId);
-        const victim = this.world.dinos.get(event.victimId);
-        shared.push({
-          type: 'dinoEaten',
-          eaterId: event.eaterId,
-          victimId: event.victimId,
-          eaterName: eater?.name ?? '?',
-          victimName: victim?.name ?? '?',
-          eaterMass: eater?.mass ?? 0,
-          victimMass: victim?.massAtDeath ?? 0,
-        });
-      } else if (event.type === 'ventErupted') {
-        shared.push({ type: 'ventErupted', vent: event.vent });
-      }
-    }
-
+    const shared = this.sharedEvents(events);
     for (const player of this.players.values()) {
       if (!player.connected) continue;
       const own: NetEvent[] = [...shared];
       for (const event of events) {
         switch (event.type) {
+          case 'bite':
           case 'eggEaten':
           case 'meatEaten':
           case 'critterEaten':
             if (this.sees(player, event.dinoId)) own.push({ type: 'bite', dinoId: event.dinoId });
+            break;
+          case 'shoved':
+            if (this.sees(player, event.dinoId)) {
+              own.push({ type: 'shoved', dinoId: event.dinoId, byId: event.byId });
+            }
             break;
           case 'dinoSpawned':
             if (this.sees(player, event.dinoId)) {
@@ -405,6 +562,58 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     }
   }
 
+  /** Events everyone hears about: kills (for the kill feed), eruptions, world events and the round. */
+  private sharedEvents(events: readonly WorldEvent[]): NetEvent[] {
+    const shared: NetEvent[] = [];
+    for (const event of events) {
+      switch (event.type) {
+        case 'dinoKilled': {
+          const killer = this.world.dinos.get(event.killerId);
+          const victim = this.world.dinos.get(event.victimId);
+          shared.push({
+            type: 'dinoKilled',
+            killerId: event.killerId,
+            victimId: event.victimId,
+            killerName: killer?.name ?? '?',
+            victimName: victim?.name ?? '?',
+            killerMass: killer?.mass ?? 0,
+            victimMass: victim?.massAtDeath ?? 0,
+            victimRank: victim?.rankAtDeath ?? 0,
+          });
+          break;
+        }
+        case 'ventErupted':
+          shared.push({ type: 'ventErupted', vent: event.vent });
+          break;
+        case 'happeningStarted': {
+          const happening = this.world.happenings.get(event.happeningId);
+          if (!happening) break;
+          shared.push({
+            type: 'happening',
+            id: happening.id,
+            kind: happening.kind,
+            variant: happening.variant,
+            x: happening.x,
+            z: happening.z,
+            zone: happening.zone,
+            food: happening.food,
+          });
+          break;
+        }
+        case 'meteorWarning':
+        case 'meteorImpact':
+          shared.push({ type: event.type });
+          break;
+        case 'roundStarted':
+          shared.push({ type: 'roundStarted', round: event.round });
+          break;
+        default:
+          break;
+      }
+    }
+    return shared;
+  }
+
   private sees(player: Player, dinoId: number): boolean {
     const state = this.dinoStates.get(dinoId);
     return state !== undefined && player.seen.dinos.has(state);
@@ -422,7 +631,7 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
     switch (command.cmd) {
       case 'setMass': {
         const mass = number(command.mass);
-        if (mass !== undefined) this.world.setMass(dino, mass);
+        if (mass !== undefined) this.world.setMass(dino, mass, this.pendingEvents);
         break;
       }
       case 'teleport': {
@@ -439,6 +648,19 @@ export class GameRoom extends Room<{ state: GameState; input: InputState }> {
       case 'endProtection':
         dino.protectedFor = 0;
         break;
+      case 'startEvent': {
+        const kind: HappeningKind = command.kind === 'meatDrop' ? 'meatDrop' : 'carcass';
+        const ahead = number(command.ahead);
+        const at =
+          ahead === undefined
+            ? undefined
+            : keepOnIsland(
+                dino.x + Math.sin(dino.heading) * ahead,
+                dino.z + Math.cos(dino.heading) * ahead,
+              );
+        this.world.startHappening(kind, this.pendingEvents, at && { x: at[0], z: at[1] });
+        return;
+      }
       default:
         return;
     }

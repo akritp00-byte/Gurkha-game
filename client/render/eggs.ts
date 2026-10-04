@@ -1,4 +1,11 @@
-import { type EggSlot, FOOD, type Heightfield, hash2, heightAt } from '@extinct/shared';
+import {
+  dangerZoneAt,
+  type EggSlot,
+  FOOD,
+  type Heightfield,
+  hash2,
+  heightAt,
+} from '@extinct/shared';
 import {
   Color,
   Euler,
@@ -12,6 +19,8 @@ import {
 
 /** Bright pastel shells that read as food from a distance and never as rocks. */
 const EGG_TINTS = [0xfff1c4, 0xbfe9ff, 0xcfffbf, 0xffcfe4, 0xfff28f].map((hex) => new Color(hex));
+/** Eggs in the danger zones are worth more, and look it: gold, and orange-gold by the tar. */
+const RICH_TINTS = { ashlands: new Color(0xffc21f), tarPits: new Color(0xff9a2e) } as const;
 const POP_SPEED = 14; // eaten eggs vanish in about 0.1 s
 const GROW_SPEED = 2.5; // new eggs grow in over about 0.4 s
 
@@ -43,7 +52,7 @@ export class EggsView {
     this.scales = new Float32Array(eggs.length);
     eggs.forEach((egg, slot) => {
       this.scales[slot] = egg.alive ? 1 : 0;
-      this.mesh.setColorAt(slot, EGG_TINTS[slot % EGG_TINTS.length]);
+      this.tint(slot);
       this.writeMatrix(slot);
     });
   }
@@ -55,6 +64,15 @@ export class EggsView {
   eggSpawned(slot: number): void {
     this.scales[slot] = 0;
     this.animating.add(slot);
+    this.tint(slot);
+  }
+
+  /** Pastel shells, or gold ones in the danger zones where an egg is worth more. */
+  private tint(slot: number): void {
+    const egg = this.eggs[slot];
+    const zone = dangerZoneAt(egg.x, egg.z);
+    this.mesh.setColorAt(slot, zone ? RICH_TINTS[zone] : EGG_TINTS[slot % EGG_TINTS.length]);
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
 
   update(dt: number): void {

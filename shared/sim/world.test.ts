@@ -1,20 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { CRITTERS, FOOD, FOOD_MASS, MASS, MEAT, ROUND, SPRINT, VENTS, WORLD } from '../config.ts';
-import { biteCenter, type MoveInput } from '../movement.ts';
+import {
+  CRITTERS,
+  DANGER_ZONES,
+  FOOD,
+  FOOD_MASS,
+  MASS,
+  MEAT,
+  ROUND,
+  STAMINA,
+  VENTS,
+  WORLD,
+  WORLD_EVENTS,
+} from '../config.ts';
+import { angleDelta, clamp } from '../math.ts';
+import { biteCenter, IDLE_INPUT, type PlayerInput } from '../movement.ts';
 import { createRandom } from '../random.ts';
 import { scaleForMass } from '../tiers.ts';
-import { VOLCANO, VOLCANO_VENTS } from '../world/layout.ts';
-import { isOpenGround } from '../world/terrain.ts';
+import { TAR_PITS, VOLCANO, VOLCANO_VENTS } from '../world/layout.ts';
+import { dangerZoneAt, foodMultiplierAt, isOpenGround } from '../world/terrain.ts';
 import type { Dino, WorldEvent } from './entities.ts';
-import { GameWorld } from './world.ts';
+import { roundOfLength } from './round.ts';
+import { GameWorld, type GameWorldOptions } from './world.ts';
 
 const TICK = 1 / 20;
-const NO_INPUT = new Map<number, MoveInput>();
-const SPRINT_RUN: MoveInput = { turn: 0, throttle: 1, sprint: true };
+const NO_INPUT = new Map<number, PlayerInput>();
+const SPRINT_RUN: PlayerInput = { ...IDLE_INPUT, throttle: 1, sprint: true };
 
-/** A world with nothing in it but what the test adds. */
-function emptyWorld(options: { eggs?: number; critters?: number } = {}): GameWorld {
-  return new GameWorld({ seed: 1, eggs: 0, critters: 0, ...options });
+/** A world with nothing in it but what the test adds: no food, no critters, no world events. */
+function emptyWorld(options: Partial<GameWorldOptions> = {}): GameWorld {
+  return new GameWorld({ seed: 1, eggs: 0, critters: 0, happenings: false, ...options });
 }
 
 /** Stand a dinosaur still at (x, z), facing `heading`, with its spawn protection over. */
@@ -39,7 +53,7 @@ function stepUntil(
   world: GameWorld,
   seconds: number,
   done: (event: WorldEvent) => boolean,
-  inputs: ReadonlyMap<number, MoveInput> = NO_INPUT,
+  inputs: ReadonlyMap<number, PlayerInput> = NO_INPUT,
 ): WorldEvent[] {
   const seen: WorldEvent[] = [];
   for (let t = 0; t < seconds; t += TICK) {
@@ -128,73 +142,72 @@ describe('eggs', () => {
 });
 
 describe('sprinting', () => {
-  it('burns 1.5% of mass a second and drops it behind the dinosaur as meat', () => {
+  it('spends stamina instead of mass, and drops no meat', () => {
     const world = emptyWorld();
     const dino = world.addPlayer('Sprinter');
     place(dino, 60, -40);
     world.setMass(dino, 60);
-    const inputs = new Map([[dino.id, SPRINT_RUN]]);
 
-    const events = run(world, 5, inputs);
+    const events = run(world, 2, new Map([[dino.id, SPRINT_RUN]]));
 
     expect(dino.sprinting).toBe(true);
-    expect(dino.mass).toBeCloseTo(60 * Math.exp(-SPRINT.massLossPerSecond * 5), 1);
-    const drops = events.filter((e) => e.type === 'meatDropped');
-    expect(drops.length).toBe(2);
-    expect(world.meat.size).toBe(2);
-    for (const chunk of world.meat.values()) expect(chunk.z).toBeLessThan(dino.z);
-    // Nothing is lost: what isn't meat yet is still owed.
-    expect(dino.mass + dino.meatOwed + world.meat.size * FOOD_MASS.meat).toBeCloseTo(60);
+    expect(dino.mass).toBe(60);
+    expect(dino.stamina).toBeCloseTo(1 - 2 / STAMINA.sprintSeconds, 1);
+    expect(events.some((e) => e.type === 'meatDropped')).toBe(false);
+    expect(world.meat.size).toBe(0);
   });
 
-  it('never takes a dinosaur below the minimum mass', () => {
+  it('winds a dinosaur that sprints too long, until it gets its breath back', () => {
     const world = emptyWorld();
     const dino = world.addPlayer('Sprinter');
     place(dino, 60, -40, Math.PI / 2);
-    world.setMass(dino, MASS.minimum + 0.5);
-    run(world, 20, new Map([[dino.id, { ...SPRINT_RUN, turn: 0.3 }]]));
-    expect(dino.mass).toBe(MASS.minimum);
+    run(world, STAMINA.sprintSeconds + 0.5, new Map([[dino.id, { ...SPRINT_RUN, turn: 0.4 }]]));
+    expect(dino.winded).toBe(true);
     expect(dino.sprinting).toBe(false);
-  });
-
-  it('costs nothing while standing still', () => {
-    const world = emptyWorld();
-    const dino = world.addPlayer('Sprinter');
-    place(dino, 60, 0);
-    world.setMass(dino, 60);
-    run(world, 2, new Map([[dino.id, { ...SPRINT_RUN, throttle: 0 }]]));
-    expect(dino.mass).toBe(60);
+    run(world, STAMINA.refillDelaySeconds + STAMINA.refillSeconds * STAMINA.minToSprint + 0.2);
+    expect(dino.winded).toBe(false);
   });
 });
 
 describe('meat', () => {
-  function sprintOnce(world: GameWorld): Dino {
-    const dino = world.addPlayer('Sprinter');
-    place(dino, 60, -40);
-    world.setMass(dino, 300);
-    stepUntil(world, 3, (e) => e.type === 'meatDropped', new Map([[dino.id, SPRINT_RUN]]));
-    place(dino, -60, 60); // out of the way
-    return dino;
+  /** A meat drop at a quiet spot in the plains, and its chunks. */
+  function meatDrop(world: GameWorld, at = { x: 60, z: 0 }) {
+    const happening = world.startHappening('meatDrop', [], at);
+    if (!happening) throw new Error('no meat drop');
+    return [...world.meat.values()].filter((chunk) => chunk.happeningId === happening.id);
   }
 
-  it('is worth 2 mass to whoever eats it', () => {
+  it('is scattered by world events, worth 2 mass in the open', () => {
     const world = emptyWorld();
-    sprintOnce(world);
+    const chunks = meatDrop(world);
+    expect(chunks.length).toBeGreaterThanOrEqual(WORLD_EVENTS.meatDrop.chunks.min - 3);
     const eater = world.addPlayer('Eater');
-    const [chunk] = world.meat.values();
+    const chunk = chunks[0];
+    expect(foodMultiplierAt(chunk.x, chunk.z)).toBe(1);
+    for (const other of chunks.slice(1)) world.meat.delete(other.id);
     place(eater, chunk.x, chunk.z - 0.6);
 
     const events = world.step(TICK, NO_INPUT);
 
     expect(events).toContainEqual({ type: 'meatEaten', meatId: chunk.id, dinoId: eater.id });
     expect(eater.mass).toBe(MASS.start + FOOD_MASS.meat);
-    expect(world.meat.size).toBe(0);
+  });
+
+  it('is worth four times as much in the Ashlands', () => {
+    const world = emptyWorld();
+    const chunks = meatDrop(world, { x: 0, z: 22 });
+    const eater = world.addPlayer('Eater');
+    const chunk = chunks.find((c) => dangerZoneAt(c.x, c.z) === 'ashlands');
+    if (!chunk) throw new Error('no chunk in the Ashlands');
+    for (const other of chunks) if (other !== chunk) world.meat.delete(other.id);
+    place(eater, chunk.x, chunk.z - 0.6);
+    world.step(TICK, NO_INPUT);
+    expect(eater.mass).toBe(MASS.start + FOOD_MASS.meat * DANGER_ZONES.foodMultiplier.ashlands);
   });
 
   it('rots away after a while', () => {
     const world = emptyWorld();
-    sprintOnce(world);
-    const [chunk] = world.meat.values();
+    const [chunk] = meatDrop(world);
     const events = run(world, MEAT.lifetimeSeconds + 0.5);
     expect(events).toContainEqual({ type: 'meatRotted', meatId: chunk.id });
     expect(world.meat.size).toBe(0);
@@ -202,22 +215,99 @@ describe('meat', () => {
 
   it('keeps at most MEAT.maxChunks on the island, dropping the oldest', () => {
     const world = emptyWorld();
-    const inputs = new Map<number, MoveInput>();
-    for (let i = 0; i < 4; i++) {
-      // Four giants sprint into the beach, stuck facing the sea, dropping meat behind them.
-      const giant = world.addPlayer(`Giant ${i}`);
-      const angle = (i * Math.PI) / 2;
-      place(giant, Math.sin(angle) * 143, Math.cos(angle) * 143, angle);
-      world.setMass(giant, 1500);
-      inputs.set(giant.id, SPRINT_RUN);
+    const events: WorldEvent[] = [];
+    for (let i = 0; i < 40; i++) {
+      const angle = (i / 40) * 2 * Math.PI;
+      world.startHappening('meatDrop', events, {
+        x: Math.cos(angle) * 90,
+        z: Math.sin(angle) * 90,
+      });
     }
-
-    const events = run(world, 25, inputs);
-
     const dropped = events.filter((e) => e.type === 'meatDropped').length;
     expect(dropped).toBeGreaterThan(MEAT.maxChunks);
     expect(world.meat.size).toBe(MEAT.maxChunks);
     expect(Math.min(...world.meat.keys())).toBe(dropped - MEAT.maxChunks + 1);
+  });
+});
+
+describe('danger zones', () => {
+  it('cover the volcano slopes and the ground round the tar pits', () => {
+    expect(dangerZoneAt(0, 20)).toBe('ashlands');
+    const pit = TAR_PITS[0];
+    expect(dangerZoneAt(pit.x + pit.radius + 5, pit.z)).toBe('tarPits');
+    expect(dangerZoneAt(-90, 60)).toBe(null);
+    expect(foodMultiplierAt(-90, 60)).toBe(1);
+    expect(foodMultiplierAt(0, 20)).toBe(DANGER_ZONES.foodMultiplier.ashlands);
+  });
+
+  it('make eggs worth more', () => {
+    const world = emptyWorld();
+    const dino = world.addPlayer('Brave');
+    place(dino, 0, 18);
+    addEgg(world, mouth(dino));
+    world.step(TICK, NO_INPUT);
+    expect(dino.mass).toBe(MASS.start + FOOD_MASS.egg * DANGER_ZONES.foodMultiplier.ashlands);
+  });
+});
+
+describe('world events', () => {
+  it('start on a timer, are announced, and end once their food is gone', () => {
+    const world = new GameWorld({ seed: 3, eggs: 0, critters: 0 });
+    const events = stepUntil(
+      world,
+      WORLD_EVENTS.firstAfterSeconds + 1,
+      (e) => e.type === 'happeningStarted',
+    );
+    const started = events.find((e) => e.type === 'happeningStarted');
+    expect(started).toBeDefined();
+    expect(world.round.clock).toBeCloseTo(WORLD_EVENTS.firstAfterSeconds, 0);
+    const [happening] = world.happenings.values();
+    expect(isOpenGround(world.terrain, happening.x, happening.z)).toBe(true);
+    expect(happening.food).toBeGreaterThan(0);
+
+    // Take its food away, and it ends.
+    for (const carcass of world.carcasses.values()) world.carcasses.delete(carcass.id);
+    world.meat.clear();
+    const ended = world.step(TICK, NO_INPUT);
+    expect(ended).toContainEqual({ type: 'happeningEnded', happeningId: happening.id });
+    expect(world.happenings.size).toBe(0);
+  });
+
+  it('bring bigger carcasses to danger zones and to the end of the round', () => {
+    const world = emptyWorld({ round: roundOfLength(100) });
+    const { food } = WORLD_EVENTS.carcass;
+    const plains = world.startHappening('carcass', [], { x: 60, z: 0 });
+    const ashes = world.startHappening('carcass', [], { x: 0, z: 22 });
+    expect(plains?.zone).toBe(null);
+    expect(ashes?.zone).toBe('ashlands');
+    expect(plains?.food).toBeGreaterThanOrEqual(food.min);
+    expect(plains?.food).toBeLessThanOrEqual(food.max);
+    const ashlands = DANGER_ZONES.foodMultiplier.ashlands;
+    expect(ashes?.food).toBeGreaterThanOrEqual(food.min * ashlands);
+
+    run(world, 90);
+    const late = world.startHappening('carcass', [], { x: -60, z: 40 });
+    expect(late?.food).toBeGreaterThan(food.min * (1 + WORLD_EVENTS.lateRoundBonus * 0.85));
+    const lateCarcass = [...world.carcasses.values()].find((c) => c.happeningId === late?.id);
+    expect(lateCarcass?.radius).toBeGreaterThan(WORLD_EVENTS.carcass.radius);
+  });
+
+  it('keep apart, and never run more than a few at once', () => {
+    const world = new GameWorld({ seed: 12, eggs: 0, critters: 0 });
+    let most = 0;
+    for (let t = 0; t < 240; t += TICK) {
+      world.step(TICK, NO_INPUT);
+      most = Math.max(most, world.happenings.size);
+      const spots = [...world.happenings.values()];
+      for (const a of spots) {
+        for (const b of spots) {
+          if (a !== b)
+            expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThanOrEqual(WORLD_EVENTS.spacing);
+        }
+      }
+    }
+    expect(world.stats.happenings).toBeGreaterThanOrEqual(5);
+    expect(most).toBeLessThanOrEqual(WORLD_EVENTS.maxActive);
   });
 });
 
@@ -235,7 +325,30 @@ describe('critters', () => {
     expect(critter.fleeing).toBe(true);
     run(world, 0.75);
     // Faster than a wandering critter could manage.
-    expect(Math.hypot(critter.x - dino.x, critter.z - dino.z)).toBeGreaterThan(11);
+    expect(Math.hypot(critter.x - dino.x, critter.z - dino.z)).toBeGreaterThan(9);
+  });
+
+  it('tire after a short bolt, so a hunter running straight at them catches up', () => {
+    for (const mass of [10, 45]) {
+      const world = emptyWorld({ critters: 1 });
+      const hunter = world.addPlayer('Hunter');
+      world.setMass(hunter, mass);
+      place(hunter, 60, -50);
+      const critter = world.critters[0];
+      critter.x = 60;
+      critter.z = -42;
+      let caught = false;
+      for (let t = 0; t < 12 && !caught; t += TICK) {
+        const toward = Math.atan2(critter.x - hunter.x, critter.z - hunter.z);
+        const turn = clamp(angleDelta(hunter.heading, toward) * 3, -1, 1);
+        const events = world.step(
+          TICK,
+          new Map([[hunter.id, { ...IDLE_INPUT, turn, throttle: 1 }]]),
+        );
+        caught = events.some((e) => e.type === 'critterEaten');
+      }
+      expect(caught, `a hunter of mass ${mass} catches it`).toBe(true);
+    }
   });
 
   it('are worth 4 mass and come back later', () => {
@@ -302,7 +415,16 @@ describe('a long random run', () => {
       const inputs = new Map(
         dinos.map(
           (d) =>
-            [d.id, { turn: random() * 2 - 1, throttle: random(), sprint: random() < 0.3 }] as const,
+            [
+              d.id,
+              {
+                turn: random() * 2 - 1,
+                throttle: random(),
+                sprint: random() < 0.3,
+                bite: random() < 0.1,
+                eat: random() < 0.3,
+              },
+            ] as const,
         ),
       );
       world.step(TICK, inputs);
@@ -313,5 +435,90 @@ describe('a long random run', () => {
       expect(r).toBeGreaterThanOrEqual(VOLCANO.blockedRadius - 1e-9);
       expect(dino.mass).toBeGreaterThanOrEqual(MASS.minimum);
     }
+  });
+});
+
+describe('the round loop', () => {
+  /** A 10-second round: warning at 8 s, impact at 10, podium until 23. */
+  function shortRound() {
+    const world = emptyWorld({ round: roundOfLength(10) });
+    const big = world.addPlayer('Big');
+    const middle = world.addPlayer('Middle');
+    const small = world.addPlayer('Small');
+    const dead = world.addPlayer('Dead');
+    world.setMass(big, 300);
+    world.setMass(middle, 120);
+    world.setMass(small, 30);
+    world.setMass(dead, 900);
+    place(big, 60, 0);
+    place(middle, -60, 0);
+    place(small, 0, 60);
+    place(dead, 0, -60);
+    return { world, big, middle, small, dead };
+  }
+
+  it('warns of the meteor, then at impact crowns the biggest and freezes everyone', () => {
+    const { world, big, middle, small, dead } = shortRound();
+    const warning = stepUntil(world, 9, (e) => e.type === 'meteorWarning');
+    expect(warning).toContainEqual({ type: 'meteorWarning' });
+    expect(world.round.clock).toBeCloseTo(8, 1);
+    dead.alive = false; // killed just before the end: no podium for the dead
+    dead.respawnIn = 99;
+
+    const impact = stepUntil(world, 3, (e) => e.type === 'meteorImpact');
+    expect(impact).toContainEqual({ type: 'meteorImpact' });
+    expect(world.round.phase).toBe('impact');
+    expect(world.round.podium.map((place) => place.name)).toEqual(['Big', 'Middle', 'Small']);
+    expect(world.round.podium[0]).toEqual({ dinoId: big.id, name: 'Big', mass: 300, isBot: false });
+    expect(middle.alive && small.alive).toBe(true);
+
+    // Frozen: inputs do nothing until the next round.
+    const before = { x: big.x, z: big.z };
+    run(world, 2, new Map([[big.id, SPRINT_RUN]]));
+    expect(big).toMatchObject(before);
+    run(world, 2);
+    expect(world.round.phase).toBe('podium');
+  });
+
+  it('starts a fresh round after the podium, with everyone hatched again', () => {
+    const { world, big, dead } = shortRound();
+    world.startHappening('carcass', [], { x: 60, z: -40 });
+    dead.alive = false;
+    dead.respawnIn = 99;
+    const events = stepUntil(world, 24, (e) => e.type === 'roundStarted');
+
+    expect(events).toContainEqual({ type: 'roundStarted', round: 2 });
+    expect(world.round).toMatchObject({ number: 2, phase: 'playing', podium: [] });
+    expect(world.round.clock).toBeLessThan(TICK);
+    for (const dino of world.dinos.values()) {
+      expect(dino.alive).toBe(true);
+      expect(dino.mass).toBe(MASS.start);
+      expect(dino.protectedFor).toBe(ROUND.spawnProtectionSeconds);
+    }
+    expect(events.filter((e) => e.type === 'dinoSpawned').map((e) => e.dinoId)).toContain(big.id);
+    expect(world.carcasses.size + world.meat.size + world.happenings.size).toBe(0);
+    expect(world.stats.rounds).toBe(1);
+  });
+
+  it('ranks the living by mass', () => {
+    const { world, big, middle, small, dead } = shortRound();
+    expect(world.standings(2).map((s) => s.name)).toEqual(['Dead', 'Big']);
+    expect(world.rankOf(dead)).toBe(1);
+    expect(world.rankOf(big)).toBe(2);
+    dead.alive = false;
+    expect(world.rankOf(dead)).toBe(0);
+    expect(world.rankOf(big)).toBe(1);
+    expect(world.rankOf(small)).toBe(3);
+    world.setMass(small, 120);
+    expect(world.rankOf(middle)).toBe(2); // a tie goes to whoever joined first
+    expect(world.rankOf(small)).toBe(3);
+  });
+
+  it('lasts five minutes, with the warning at four and ten seconds of podium', () => {
+    expect(ROUND.durationSeconds).toBe(300);
+    expect(ROUND.meteorWarningAtSeconds).toBe(240);
+    expect(ROUND.impactSequenceSeconds).toBe(3);
+    expect(ROUND.intermissionSeconds).toBe(10);
+    expect(roundOfLength(10).meteorWarningAtSeconds).toBe(8);
   });
 });

@@ -1,4 +1,4 @@
-import { nextTier, tierForMass, tierProgress } from '@extinct/shared';
+import { nextTier, tierForMass, tierProgress, wholeMass } from '@extinct/shared';
 
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -13,19 +13,23 @@ function element<K extends keyof HTMLElementTagNameMap>(
 
 /** A short note about what's happening to you, shown above the HUD card. */
 export interface StatusChip {
-  readonly kind: 'protected' | 'hidden' | 'sprinting' | 'slowed' | 'tired';
+  readonly kind:
+    'protected' | 'hidden' | 'sprinting' | 'slowed' | 'tired' | 'carrying' | 'eating' | 'danger';
   readonly text: string;
 }
 
-/** Bottom-left card: current species, mass and progress to the next evolution. */
+/** Bottom-left card: species, mass, progress to the next evolution, and the sprint bar. */
 export class Hud {
   private readonly species: HTMLElement;
   private readonly mass: HTMLElement;
   private readonly fill: HTMLElement;
   private readonly next: HTMLElement;
   private readonly status: HTMLElement;
+  private readonly stamina: HTMLElement;
+  private readonly staminaFill: HTMLElement;
   private shownMass = Number.NaN;
   private shownStatus = '';
+  private shownStamina = '';
 
   constructor(parent: HTMLElement) {
     const card = element('section', 'hud', parent);
@@ -38,6 +42,20 @@ export class Hud {
     const bar = element('div', 'hud-progress', card);
     this.fill = element('div', 'hud-progress-fill', bar);
     this.next = element('div', 'hud-next', card);
+    this.stamina = element('div', 'hud-stamina', card);
+    this.stamina.dataset.testid = 'stamina';
+    this.stamina.title = 'Stamina for sprinting';
+    this.staminaFill = element('div', 'hud-stamina-fill', this.stamina);
+  }
+
+  /** The sprint bar: full is 1. It greys out while you're winded. */
+  setStamina(stamina: number, winded: boolean): void {
+    const percent = Math.round(stamina * 100);
+    const key = `${percent}|${winded}`;
+    if (key === this.shownStamina) return;
+    this.shownStamina = key;
+    this.staminaFill.style.width = `${percent}%`;
+    this.stamina.dataset.winded = String(winded);
   }
 
   setStatus(chips: readonly StatusChip[]): void {
@@ -55,7 +73,7 @@ export class Hud {
   }
 
   update(mass: number): void {
-    const rounded = Math.floor(mass);
+    const rounded = wholeMass(mass);
     if (rounded === this.shownMass) return;
     this.shownMass = rounded;
     const tier = tierForMass(mass);
